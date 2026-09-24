@@ -32,6 +32,7 @@ import org.objectweb.asm.Opcodes;
 final class JniClass extends ClassVisitor {
   String name;
   String parent;
+  String signature;
   final List<String> interfaces = new ArrayList<String>();
   int access;
   boolean platform;
@@ -50,6 +51,7 @@ final class JniClass extends ClassVisitor {
   public void visit(int version, int flags, String binaryName, String signature, String superName, String[] interfaces) {
     name = binaryName;
     parent = superName;
+    this.signature = signature;
     if (interfaces != null) { java.util.Collections.addAll(this.interfaces, interfaces); }
     access = flags;
   }
@@ -81,7 +83,7 @@ final class JniClass extends ClassVisitor {
 
   @Override
   public MethodVisitor visitMethod(int flags, String method, String descriptor, String signature, String[] exceptions) {
-    Method entry = new Method(flags, method, descriptor);
+    Method entry = new Method(flags, method, descriptor, signature);
     if ((flags & (Opcodes.ACC_STATIC | Opcodes.ACC_PRIVATE)) == 0
         && !method.startsWith("<")) { instanceMethods.add(entry); }
     if ((flags & Opcodes.ACC_NATIVE) != 0) { natives.add(entry); }
@@ -112,8 +114,10 @@ final class JniClass extends ClassVisitor {
     final int access;
     final String name;
     final String descriptor;
-    Method(int access, String name, String descriptor) {
-      this.access = access; this.name = name; this.descriptor = descriptor;
+    final String signature;
+    Method(int access, String name, String descriptor) { this(access, name, descriptor, null); }
+    Method(int access, String name, String descriptor, String signature) {
+      this.access = access; this.name = name; this.descriptor = descriptor; this.signature = signature;
     }
   }
 

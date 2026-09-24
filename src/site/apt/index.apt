@@ -256,8 +256,12 @@ noarch area in the target directory.
  where needed to satisfy interface contracts, choosing covariant return types
  independently of interface order. Redundant interface clauses are omitted so that
  inherited generic instantiations, such as <<<Comparable<E>>> on an enum, remain
- authoritative. Unrelated methods remain omitted. Required contract signature types
- must be available on the classpath.
+ authoritative. Retained generic contracts are specialized before supporting methods
+ are emitted: for example, <<<Supplier<String>.get()>>> needs a <<<String>>> return.
+ Compiler-generated bridge adapters do not replace source overrides. Native signatures
+ remain erased. Unrelated methods remain omitted. Required contract signature types,
+ including generic argument types needed by the compiler's inheritance checks, must
+ be available on the classpath.
 
     Temporary sources, throwaway class files, staged headers, compiler arguments and
  diagnostics are kept in <<<target/nar/javac-headers>>> (relative to the configured

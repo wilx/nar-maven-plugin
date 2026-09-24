@@ -97,6 +97,75 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testTransitiveGenericContracts() throws Exception {
+    compile(classes, expected,
+        "Transform.java", "public interface Transform<A, B> { B[][] convert(A[] input); }",
+        "Flip.java", "public interface Flip<X, Y> extends Transform<Y, X> {}",
+        "Text.java", "public interface Text extends Flip<String, Integer> {}",
+        "Lists.java", "public interface Lists<T> extends java.util.function.Supplier<java.util.List<T>> {}",
+        "Strings.java", "public interface Strings extends Lists<String> {}",
+        "Api.java", "public enum Api implements Text, Strings { VALUE {"
+        + " public String[][] convert(Integer[] input) { return null; }"
+        + " public java.util.List<String> get() { return null; } }; public native void call(); }",
+        "Sink.java", "public interface Sink extends java.util.function.Consumer<String> {}",
+        "Native.java", "public enum Native implements Sink { VALUE; public native void accept(String value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGenericMethodBoundsAndShadowing() throws Exception {
+    compile(classes, expected,
+        "Generic.java", "public interface Generic<T> { <T extends Number> T value(); <U extends T> U adjust(U input); }",
+        "Text.java", "public interface Text extends Generic<CharSequence> {}",
+        "Api.java", "public enum Api implements Text { VALUE {"
+        + " public <T extends Number> T value() { return null; }"
+        + " public <U extends CharSequence> U adjust(U input) { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRawAndGeneratedGenericInterfaceContracts() throws Exception {
+    compile(classes, expected,
+        "Generic.java", "public interface Generic<T> extends java.util.function.Supplier<String> {}",
+        "Api.java", "public enum Api implements Generic<Integer> { VALUE { public String get() { return null; } }; public native void call(); }",
+        "Outer.java", "public class Outer { public interface Generic<T> extends java.util.function.Supplier<T> {}"
+        + " public enum Api implements Generic<String> { VALUE { public String get() { return null; } }; public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSpecializedCovariantContracts() throws Exception {
+    compile(classes, expected,
+        "Text.java", "public interface Text extends java.util.function.Supplier<String> {}",
+        "Wide.java", "public interface Wide { Object get(); }",
+        "Api.java", "public enum Api implements Text, Wide { VALUE { public String get() { return null; } }; public native void call(); }",
+        "Reverse.java", "public enum Reverse implements Wide, Text { VALUE { public String get() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedGenericImplementation() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> implements java.util.function.Supplier<T> { public final T get() { return null; } }",
+        "Strings.java", "public class Strings extends Base<String> {}",
+        "Text.java", "public interface Text extends java.util.function.Supplier<String> {}",
+        "Wide.java", "public interface Wide { default Object get() { return null; } }",
+        "Api.java", "public class Api extends Strings implements Text, Wide { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testUnrelatedGenericContractTypeRemainsUnresolved() throws Exception {
+    compile(classes, expected,
+        "Missing.java", "public class Missing {}",
+        "Pair.java", "public interface Pair<A> extends java.util.function.Supplier<A> { default java.util.List<Missing> ignored() { return null; } }",
+        "Text.java", "public interface Text extends Pair<String> {}",
+        "Api.java", "public enum Api implements Text { VALUE { public String get() { return null; } }; public native void call(); }");
+    Files.delete(new File(classes, "Missing.class").toPath());
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testExplicitComparableEnum() throws Exception {
     compile(classes, expected,
         "Api.java", "public enum Api implements Comparable<Api> { VALUE; public native void call(); }");

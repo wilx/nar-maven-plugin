@@ -52,6 +52,7 @@
             <extraClasses>
               <extraClass>dependency.Container$Api</extraClass>
               <extraClass>dependency.Constants</extraClass>
+              <extraClass>dependency.GenericApi</extraClass>
             </extraClasses>
           </javah>
         </configuration>

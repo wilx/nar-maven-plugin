@@ -58,6 +58,7 @@ final class JavacHeaders {
   private final Map<String, JniClass> declarations = new TreeMap<String, JniClass>();
   private final Map<String, String> constructors = new HashMap<String, String>();
   private final Map<String, List<JniClass.Method>> interfaceMethods = new HashMap<String, List<JniClass.Method>>();
+  private final Map<String, JniSignature> signatures = new HashMap<String, JniSignature>();
   private final Set<String> references = new HashSet<String>();
 
   JavacHeaders(File javac, File work, List<File> classPath, List<File> bootClassPath, Log log) throws IOException {
@@ -265,14 +266,73 @@ final class JavacHeaders {
     Contract(String owner, JniClass.Method method) { this.owner = owner; this.method = method; }
   }
 
-  private void interfaceMethods(JniClass model, Map<String, List<Contract>> methods, Set<String> visited)
+  /** The effective type as javac sees it, after any generated declaration erases its own generics. */
+  private static final class TypeView {
+    final JniClass model;
+    final Map<String, Type> arguments;
+    final boolean raw;
+    TypeView(JniClass model, Map<String, Type> arguments, boolean raw) {
+      this.model = model; this.arguments = arguments; this.raw = raw;
+    }
+    String key() { return model.name + ":" + raw + arguments; }
+    JniClass.Method method(JniClass.Method method) {
+      return raw || method.signature == null ? method : JniSignature.read(method.signature).method(method, arguments);
+    }
+  }
+
+  private JniSignature signature(JniClass model) {
+    JniSignature signature = signatures.get(model.name);
+    if (signature == null) { signature = JniSignature.read(model.signature); signatures.put(model.name, signature); }
+    return signature;
+  }
+
+  private TypeView view(String name, List<Type> arguments) throws IOException {
+    JniClass model = metadata.resolve(name);
+    JniSignature signature = signature(model);
+    if (arguments.isEmpty()) {
+      return new TypeView(model, Collections.<String, Type>emptyMap(), !signature.bounds.isEmpty());
+    }
+    if (arguments.size() != signature.bounds.size()) {
+      throw new IOException("Inconsistent generic type arguments for " + name);
+    }
+    return new TypeView(model, signature.bind(arguments), false);
+  }
+
+  private TypeView rawView(String name) throws IOException { return view(name, Collections.<Type>emptyList()); }
+
+  private List<TypeView> parents(TypeView type) throws IOException {
+    JniClass model = type.model;
+    List<TypeView> result = new ArrayList<TypeView>();
+    if (declarations.containsKey(model.name)) {
+      // Match the source we emit, including Enum<Self>'s implicit specialization.
+      if (model.parent != null) {
+        result.add(model.isEnum() ? view(model.parent, Collections.singletonList(Type.getObjectType(model.name)))
+            : rawView(model.parent));
+      }
+      for (String iface : directInterfaces(model)) { result.add(rawView(iface)); }
+    } else if (type.raw || model.signature == null) {
+      // The supertypes of a raw type are themselves erased.
+      if (model.parent != null) { result.add(rawView(model.parent)); }
+      for (String iface : model.interfaces) { result.add(rawView(iface)); }
+    } else {
+      for (JniSignature.Value parent : signature(model).parents) {
+        List<Type> arguments = new ArrayList<Type>();
+        for (JniSignature.Value argument : parent.arguments) { arguments.add(argument.erase(type.arguments)); }
+        result.add(view(parent.name, arguments));
+      }
+    }
+    return result;
+  }
+
+  private void interfaceMethods(TypeView type, Map<String, List<Contract>> methods, Set<String> visited)
       throws IOException {
-    if (!visited.add(model.name)) { return; }
-    if (model.parent != null) { interfaceMethods(metadata.resolve(model.parent), methods, visited); }
-    for (String iface : model.interfaces) { interfaceMethods(metadata.resolve(iface), methods, visited); }
+    if (!visited.add(type.key())) { return; }
+    for (TypeView parent : parents(type)) { interfaceMethods(parent, methods, visited); }
+    JniClass model = type.model;
     if (model.isInterface() && !declarations.containsKey(model.name)) {
-      for (JniClass.Method method : model.instanceMethods) {
-        if ((method.access & Opcodes.ACC_BRIDGE) != 0) { continue; }
+      for (JniClass.Method original : model.instanceMethods) {
+        if ((original.access & Opcodes.ACC_BRIDGE) != 0) { continue; }
+        JniClass.Method method = type.method(original);
         String key = methodKey(method);
         List<Contract> contracts = methods.get(key);
         if (contracts == null) { contracts = new ArrayList<Contract>(); methods.put(key, contracts); }
@@ -283,13 +343,12 @@ final class JavacHeaders {
 
   private List<JniClass.Method> interfaceMethods(JniClass model) throws IOException {
     Map<String, List<Contract>> methods = new TreeMap<String, List<Contract>>();
-    interfaceMethods(model, methods, new HashSet<String>());
+    interfaceMethods(rawView(model.name), methods, new HashSet<String>());
     Map<String, JniClass.Method> implementations = new HashMap<String, JniClass.Method>();
     for (JniClass.Method method : model.instanceMethods) {
-      String key = methodKey(method);
-      JniClass.Method previous = implementations.get(key);
-      // Prefer the actual covariant return over a compiler-generated bridge.
-      if (previous == null || (previous.access & Opcodes.ACC_BRIDGE) != 0) { implementations.put(key, method); }
+      // Bridges are bytecode adapters, not source overrides. In particular a
+      // bridge may delegate to a narrower (possibly final) superclass method.
+      if ((method.access & Opcodes.ACC_BRIDGE) == 0) { implementations.put(methodKey(method), method); }
     }
     List<JniClass.Method> result = new ArrayList<JniClass.Method>();
     for (Map.Entry<String, List<Contract>> entry : methods.entrySet()) {
@@ -368,15 +427,17 @@ final class JavacHeaders {
   }
 
   private boolean inheritsImplementation(JniClass model, String key) throws IOException {
-    for (String parent = model.parent; parent != null;) {
-      JniClass ancestor = metadata.resolve(parent);
-      for (JniClass.Method method : ancestor.instanceMethods) {
+    TypeView type = rawView(model.name);
+    while (type.model.parent != null) {
+      type = parents(type).get(0);
+      for (JniClass.Method original : type.model.instanceMethods) {
+        if ((original.access & Opcodes.ACC_BRIDGE) != 0) { continue; }
+        JniClass.Method method = type.method(original);
         if (key.equals(methodKey(method))) {
-          if (declarations.containsKey(parent)) { return false; } // its original bodies are omitted
+          if (declarations.containsKey(type.model.name)) { return false; } // its original bodies are omitted
           return (method.access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT)) == Opcodes.ACC_PUBLIC;
         }
       }
-      parent = ancestor.parent;
     }
     return false;
   }
