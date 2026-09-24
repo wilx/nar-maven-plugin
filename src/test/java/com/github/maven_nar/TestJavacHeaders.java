@@ -59,6 +59,44 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testEnumSpecializedGenericContract() throws Exception {
+    compile(classes, expected,
+        "Text.java", "public interface Text extends java.util.function.Supplier<String> {}",
+        "Api.java", "public enum Api implements Text { VALUE { public String get() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRecordSpecializedGenericContract() throws Exception {
+    String version = System.getProperty("java.specification.version");
+    if (version.startsWith("1.") || Integer.parseInt(version) < 16) { return; }
+    compile(classes, expected,
+        "Text.java", "public interface Text extends java.util.function.Consumer<String> {}",
+        "Container.java", "public record Container(int x) implements Text { public void accept(String s) {} public static class Api { public native Container call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedCovariantBridgeDefaultConflict() throws Exception {
+    compile(classes, expected,
+        "Wide.java", "public interface Wide { default Object value() { return null; } }",
+        "Narrow.java", "public interface Narrow { String value(); }",
+        "Base.java", "public class Base { public String value() { return null; } }",
+        "Api.java", "public class Api extends Base implements Wide, Narrow { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedFinalCovariantBridgeDefaultConflict() throws Exception {
+    compile(classes, expected,
+        "Wide.java", "public interface Wide { default Object value() { return null; } }",
+        "Narrow.java", "public interface Narrow { String value(); }",
+        "Base.java", "public class Base { public final String value() { return null; } }",
+        "Api.java", "public class Api extends Base implements Wide, Narrow { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testExplicitComparableEnum() throws Exception {
     compile(classes, expected,
         "Api.java", "public enum Api implements Comparable<Api> { VALUE; public native void call(); }");
