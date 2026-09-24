@@ -59,6 +59,53 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testCovariantInterfaceReturn() throws Exception {
+    compile(classes, expected,
+      "Marker.java", "public interface Marker {}",
+      "Base.java", "public class Base { public Marker call() { return null; } }",
+      "Api.java", "public class Api extends Base implements Marker { public native Api call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testCovariantEnclosingRecordReturn() throws Exception {
+    String version = System.getProperty("java.specification.version");
+    if (version.startsWith("1.") || Integer.parseInt(version) < 16) { return; }
+    compile(classes, expected,
+      "Base.java", "public class Base { public Record call() { return null; } }",
+      "Container.java", "public record Container(int x) { public static class Api extends Base { public native Container call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testManifestClassPath() throws Exception {
+    File dep = directory("dependency");
+    compile(dep, null, "dep/Base.java", "package dep; public class Base {}");
+    File dependencyJar = jar(dep, null, false);
+    File library = directory("library");
+    compile(library, null, "Anchor.java", "public class Anchor {}");
+    File libraryJar = new File(work, "library.jar");
+    Manifest manifest = new Manifest();
+    manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+    manifest.getMainAttributes().put(Attributes.Name.CLASS_PATH, "dependency.jar");
+    try (OutputStream stream = Files.newOutputStream(libraryJar.toPath()); JarOutputStream out = new JarOutputStream(stream, manifest)) {
+      addJarClasses(out, library, "");
+    }
+    compileWithPath(classes, expected, Arrays.asList(libraryJar),
+      "Api.java", "public class Api extends dep.Base { public native void call(); }");
+    File javah = TestJavah.jdkTool("javah");
+    if (javah.isFile()) {
+      File legacy = directory("legacy");
+      Process process = new ProcessBuilder(javah.getPath(), "-classpath", classes + File.pathSeparator + libraryJar,
+          "-d", legacy.getPath(), "Api").inheritIO().start();
+      assertEquals("Legacy javah resolves manifest Class-Path", 0, process.waitFor());
+      assertTrue(new File(legacy, "Api.h").isFile());
+      System.out.println("Legacy javah control passed with manifest Class-Path");
+    }
+    generate(classes, Arrays.asList(classes, libraryJar), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testNestedDeclarationsAndSignatures() throws Exception {
     compile(classes, expected,
         "p/Outer.java", "package p; public class Outer {"
