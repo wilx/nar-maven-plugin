@@ -59,6 +59,50 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testExplicitComparableEnum() throws Exception {
+    compile(classes, expected,
+        "Api.java", "public enum Api implements Comparable<Api> { VALUE; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGenericInterfaceAlsoInheritedFromBase() throws Exception {
+    compile(classes, expected,
+        "Value.java", "public interface Value<T> { T value(); }",
+        "Base.java", "public abstract class Base implements Value<String> {}",
+        "Api.java", "public abstract class Api extends Base implements Value<String> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testClassResolvesDefaultConflict() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left { default int value() { return 1; } }",
+        "Right.java", "public interface Right { default int value() { return 2; } }",
+        "Api.java", "public class Api implements Left, Right { public int value() { return 3; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testEnumResolvesDefaultConflict() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left { default int value() { return 1; } }",
+        "Right.java", "public interface Right { default int value() { return 2; } }",
+        "Api.java", "public enum Api implements Left, Right { VALUE; public int value() { return 3; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testEnumConstantCovariantContracts() throws Exception {
+    compile(classes, expected,
+        "Narrow.java", "public interface Narrow { String value(); }",
+        "Wide.java", "public interface Wide { Object value(); }",
+        "Api.java", "public enum Api implements Narrow, Wide { VALUE { public String value() { return null; } }; public native void call(); }",
+        "Reverse.java", "public enum Reverse implements Wide, Narrow { VALUE { public String value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testCovariantInterfaceReturn() throws Exception {
     compile(classes, expected,
       "Marker.java", "public interface Marker {}",
