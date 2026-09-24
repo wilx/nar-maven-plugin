@@ -30,9 +30,8 @@ import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.apache.maven.toolchain.ToolchainManager;
 
 /**
- * Compiles class files into c/c++ headers using "javah". Any class file that
- * contains methods that were declared
- * "native" will be run through javah.
+ * Generates JNI headers from compiled native declarations using javah or javac -h.
+ * The javac backend reconstructs temporary source declarations from class metadata.
  *
  * @requiresSession
  * @author Mark Donszelmann

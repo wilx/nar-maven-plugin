@@ -155,17 +155,68 @@ with compiled shareable libraries.
 noarch area in the target directory.
                 
 * {nar-javah}
-                
-	This goal will run the javah tool on any class file in the <<<javah.classDirectory>>> directory
-that has native methods in it. The actual class files are inspected (rather than their sources).
-The javah tool is picked up from the java installation and is run with a classpath of the
-<<<javah.classDirectory>>> and all depencies' classpaths, unless you specify a list in <<<javah.classPaths>>>. 
-Additional classnames like java.sql.Types, which have no actual *.class file in the classDirectory, can be added
-using the <<<javah.extraClasses>>> list. You can also set a boot classpath using <<<javah.bootClassPaths>>>.
 
-	This goal has no effect if there are no java sources, or if none of the java classes contain a native
-method.
-                
+    Generates JNI headers from compiled classes in <<<javah.classDirectory>>> (by
+ default <<<target/classes>>>), selecting native classes with <<<javah.includes>>>
+ and <<<javah.excludes>>>. Sources are not required. Headers are published to
+ <<<javah.jniDirectory>>> (by default <<<target/nar/javah-include>>>).
+
+    Select the backend with <<<javah.mode>>>:
+
+    * <<<auto>>> (default): use <<<javah>>> when the selected JDK provides it;
+ otherwise generate temporary Java declarations using ASM and run <<<javac -h>>>.
+
+    * <<<javah>>>: require the legacy tool and retain timestamp-based generation.
+
+    * <<<javac>>>: require JDK 8 or newer and always regenerate all selected headers,
+ including dependency classes, so dependency changes are taken into account.
+
+    []
+
+    An explicitly configured <<<javah.name>>> command remains a legacy command in
+ <<<auto>>> mode. A failing command is reported; it does not trigger fallback.
+ The selected Maven JDK toolchain supplies the compiler. <<<javaHome>>> is used
+ only when no toolchain is selected.
+
++--
+<javah>
+  <mode>javac</mode>
+  <extraClasses>
+    <extraClass>example.NativeLibrary$Api</extraClass>
+    <extraClass>example.Constants</extraClass>
+  </extraClasses>
+</javah>
++--
+
+    The compile classpath supplies dependency types; <<<javah.classPaths>>> can
+ replace it explicitly. <<<javah.bootClassPaths>>> is also passed to the compiler
+ (subject to that JDK's supported options). The new backend supports directories,
+ JARs and multi-release JARs, using the selected compiler's JDK version.
+ <<<javah.extraClasses>>> uses binary class names and works even with no local
+ native classes. Explicitly selected classes without native methods receive a
+ constants-only header, without an extra generated constant.
+
+    The <<<javac>>> backend supports application and dependency top-level and member
+ classes, including nested classes and native enums. Local/anonymous classes and
+ classes enclosed within them cannot be reconstructed as header targets. JDK/platform
+ classes cannot be header targets (use legacy <<<javah>>> for targets such as
+ <<<java.sql.Types>>>); ordinary references to JDK types are supported. Missing or
+ source-inexpressible required declarations produce errors.
+
+    Only native signatures, primitive constants, containment and superclass metadata
+ are reconstructed. Real signature types and superclasses must be available on the
+ classpath. Types used only in omitted methods or unrelated fields are not eagerly
+ resolved. Superclass constructors must have an accessible, source-expressible
+ invocation; failures identify the class and constructor candidates. Enclosing
+ interfaces retain interface form, and enclosing records use supporting class shells.
+
+    Temporary sources, throwaway class files, staged headers, compiler arguments and
+ diagnostics are kept in <<<target/nar/javac-headers>>> (relative to the configured
+ build directory), in <<<sources>>>, <<<classes>>>, <<<headers>>>, <<<javac.args>>>
+ and <<<javac.log>>>. Application class files are not overwritten, and annotation
+ processing is disabled. Compilation and verification of every requested header
+ finish before publication; a compiler failure leaves existing headers intact.
+
 * {nar-gnu-make}  
 
     Runs "make" followed by "make install" to put the final files in position for copying to the NAR target areas by the 
