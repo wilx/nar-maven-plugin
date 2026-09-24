@@ -44,26 +44,30 @@ import org.codehaus.plexus.util.FileUtils;
 import org.codehaus.plexus.util.StringUtils;
 
 /**
- * Sets up the javah configuration
+ * Configures JNI header generation with javah or javac -h.
  *
  * @author Mark Donszelmann
  */
 public class Javah {
 
   /**
-   * Javah command to run.
+   * Legacy javah command to run. A custom name is preserved in auto mode;
+   * javac mode ignores this setting.
    */
   @Parameter(defaultValue = "javah")
   private String name = "javah";
   
   /**
-   * Header generator: auto (javah when available), javah, or javac.
+   * Header generator: auto, javah, or javac. Auto uses javah when the selected
+   * JDK provides it (normally JDK 8 and 9), otherwise javac -h (JDK 10+).
+   * Explicit javac mode requires JDK 8 or newer. Selection uses the Maven JDK
+   * toolchain, or javaHome when no toolchain is selected.
    */
   @Parameter(defaultValue = "auto")
   private String mode = "auto";
 
   /**
-   * Skip javah.
+   * Skip JNI header generation with either tool.
    */
   @Parameter
   private boolean skip = false;
@@ -106,7 +110,10 @@ public class Javah {
   private Set excludes = new HashSet();
 
   /**
-   * A list of class names e.g. from java.sql.* that are also passed to javah.
+   * Additional header targets specified as binary class names. The javac
+   * backend supports dependency-only and constants-only targets, but rejects
+   * JDK/platform classes. Legacy javah adds these targets only when local
+   * native classes trigger generation.
    */
   @Parameter
   private Set extraClasses = new HashSet();
