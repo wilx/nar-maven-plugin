@@ -206,7 +206,7 @@ final class JavacHeaders {
       // Establish which interfaces are source stubs before resolving method
       // contracts: methods omitted from those interfaces need no implementation.
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) {
-        if (model.isEnum() || model.isRecord()) {
+        if (!model.isInterface() || !model.interfaces.isEmpty()) {
           List<JniClass.Method> methods = interfaceMethods(model);
           interfaceMethods.put(model.name, methods);
           for (JniClass.Method method : methods) {
@@ -258,20 +258,31 @@ final class JavacHeaders {
     return method.name + method.descriptor.substring(0, method.descriptor.indexOf(')') + 1);
   }
 
-  private void interfaceMethods(JniClass model, Map<String, JniClass.Method> methods, Set<String> visited)
+  /** The declaring interface matters: a more specific declaration overrides defaults and abstracts alike. */
+  private static final class Contract {
+    final String owner;
+    final JniClass.Method method;
+    Contract(String owner, JniClass.Method method) { this.owner = owner; this.method = method; }
+  }
+
+  private void interfaceMethods(JniClass model, Map<String, List<Contract>> methods, Set<String> visited)
       throws IOException {
     if (!visited.add(model.name)) { return; }
+    if (model.parent != null) { interfaceMethods(metadata.resolve(model.parent), methods, visited); }
     for (String iface : model.interfaces) { interfaceMethods(metadata.resolve(iface), methods, visited); }
     if (model.isInterface() && !declarations.containsKey(model.name)) {
       for (JniClass.Method method : model.instanceMethods) {
-        if ((method.access & Opcodes.ACC_ABSTRACT) != 0) { methods.put(methodKey(method), method); }
-        else { methods.remove(methodKey(method)); }
+        if ((method.access & Opcodes.ACC_BRIDGE) != 0) { continue; }
+        String key = methodKey(method);
+        List<Contract> contracts = methods.get(key);
+        if (contracts == null) { contracts = new ArrayList<Contract>(); methods.put(key, contracts); }
+        contracts.add(new Contract(model.name, method));
       }
     }
   }
 
   private List<JniClass.Method> interfaceMethods(JniClass model) throws IOException {
-    Map<String, JniClass.Method> methods = new TreeMap<String, JniClass.Method>();
+    Map<String, List<Contract>> methods = new TreeMap<String, List<Contract>>();
     interfaceMethods(model, methods, new HashSet<String>());
     Map<String, JniClass.Method> implementations = new HashMap<String, JniClass.Method>();
     for (JniClass.Method method : model.instanceMethods) {
@@ -281,31 +292,111 @@ final class JavacHeaders {
       if (previous == null || (previous.access & Opcodes.ACC_BRIDGE) != 0) { implementations.put(key, method); }
     }
     List<JniClass.Method> result = new ArrayList<JniClass.Method>();
-    for (Map.Entry<String, JniClass.Method> entry : methods.entrySet()) {
-      JniClass.Method method = implementations.get(entry.getKey());
-      // Do not override concrete superclass methods (notably Enum's final methods).
-      if (method == null && inheritsImplementation(model, entry.getKey())) { continue; }
-      if (method == null) { method = entry.getValue(); }
-      if (targets.contains(model.name) && (method.access & Opcodes.ACC_NATIVE) != 0) { continue; }
+    for (Map.Entry<String, List<Contract>> entry : methods.entrySet()) {
+      List<Contract> contracts = new ArrayList<Contract>();
+      for (Contract candidate : entry.getValue()) {
+        boolean overridden = false;
+        for (Contract other : entry.getValue()) {
+          if (!candidate.owner.equals(other.owner) && subtype(other.owner, candidate.owner)) {
+            overridden = true; break;
+          }
+        }
+        if (!overridden) { contracts.add(candidate); }
+      }
+      boolean hasDefault = false;
+      for (Contract contract : contracts) {
+        if ((contract.method.access & Opcodes.ACC_ABSTRACT) == 0) { hasDefault = true; }
+      }
+      // A single surviving default needs no stub. Abstract classes need only
+      // conflict resolvers; do not resolve unrelated abstract method signatures.
+      if (contracts.size() == 1 && hasDefault) { continue; }
+      boolean concrete = model.isEnum() || model.isRecord();
+      if (!concrete && !hasDefault && contracts.size() == 1) { continue; }
+      JniClass.Method own = implementations.get(entry.getKey());
+      if (targets.contains(model.name) && own != null && (own.access & Opcodes.ACC_NATIVE) != 0) { continue; }
+      // Do not override retained superclass implementations, notably Enum's final methods.
+      if (own == null && inheritsImplementation(model, entry.getKey())) { continue; }
+      JniClass.Method contract = compatibleReturn(contracts);
+      if (!concrete && !hasDefault && contract != null) { continue; }
+      JniClass.Method method = own == null ? contract : own;
+      if (method == null) {
+        throw new IOException("No compatible interface return type for " + model.name + "." + entry.getKey());
+      }
       result.add(method);
     }
     return result;
+  }
+
+  private JniClass.Method compatibleReturn(List<Contract> contracts) throws IOException {
+    // Pick a return assignable to every contract, regardless of interface order.
+    for (Contract candidate : contracts) {
+      boolean compatible = true;
+      for (Contract other : contracts) {
+        if (!subtype(Type.getReturnType(candidate.method.descriptor), Type.getReturnType(other.method.descriptor))) {
+          compatible = false; break;
+        }
+      }
+      if (compatible) { return candidate.method; }
+    }
+    return null;
+  }
+
+  private boolean subtype(Type child, Type parent) throws IOException {
+    if (child.equals(parent)) { return true; }
+    if (child.getSort() == Type.ARRAY) {
+      if (parent.getSort() == Type.ARRAY) {
+        return subtype(Type.getType(child.getDescriptor().substring(1)), Type.getType(parent.getDescriptor().substring(1)));
+      }
+      return parent.equals(Type.getType(Object.class)) || parent.equals(Type.getType(Cloneable.class))
+          || parent.equals(Type.getType(java.io.Serializable.class));
+    }
+    return child.getSort() == Type.OBJECT && parent.getSort() == Type.OBJECT
+        && subtype(child.getInternalName(), parent.getInternalName());
+  }
+
+  private boolean subtype(String child, String parent) throws IOException {
+    return subtype(child, parent, new HashSet<String>());
+  }
+
+  private boolean subtype(String child, String parent, Set<String> visited) throws IOException {
+    if (child.equals(parent) || "java/lang/Object".equals(parent)) { return true; }
+    if (!visited.add(child)) { return false; }
+    JniClass model = metadata.resolve(child);
+    if (model.parent != null && subtype(model.parent, parent, visited)) { return true; }
+    for (String iface : model.interfaces) { if (subtype(iface, parent, visited)) { return true; } }
+    return false;
   }
 
   private boolean inheritsImplementation(JniClass model, String key) throws IOException {
     for (String parent = model.parent; parent != null;) {
       JniClass ancestor = metadata.resolve(parent);
       for (JniClass.Method method : ancestor.instanceMethods) {
-        if ((method.access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT)) == Opcodes.ACC_PUBLIC
-            && key.equals(methodKey(method))) { return true; }
+        if (key.equals(methodKey(method))) {
+          if (declarations.containsKey(parent)) { return false; } // its original bodies are omitted
+          return (method.access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT)) == Opcodes.ACC_PUBLIC;
+        }
       }
       parent = ancestor.parent;
     }
     return false;
   }
 
+  private List<String> directInterfaces(JniClass model) throws IOException {
+    List<String> result = new ArrayList<String>();
+    for (String iface : model.interfaces) {
+      boolean inherited = model.parent != null && subtype(model.parent, iface);
+      for (String other : model.interfaces) {
+        if (!iface.equals(other) && subtype(other, iface)) { inherited = true; break; }
+      }
+      // Keep the inherited instantiation (e.g. Enum<E>'s Comparable<E>),
+      // rather than adding an incompatible raw version of the same interface.
+      if (!inherited) { result.add(iface); }
+    }
+    return result;
+  }
+
   private boolean hasSealedParent(JniClass model) throws IOException {
-    List<String> parents = new ArrayList<String>(model.interfaces);
+    List<String> parents = new ArrayList<String>(directInterfaces(model));
     if (model.parent != null) { parents.add(model.parent); }
     for (String parent : parents) {
       if (!declarations.containsKey(parent) && metadata.resolve(parent).sealed) { return true; }
@@ -413,9 +504,10 @@ final class JavacHeaders {
         && model.parent != null && !"java/lang/Object".equals(model.parent)) {
       out.append(" extends ").append(metadata.sourceName(model.parent));
     }
-    for (int i = 0; i < model.interfaces.size(); i++) {
+    List<String> interfaces = directInterfaces(model);
+    for (int i = 0; i < interfaces.size(); i++) {
       out.append(i == 0 ? (model.isInterface() ? " extends " : " implements ") : ", ")
-          .append(metadata.sourceName(model.interfaces.get(i)));
+          .append(metadata.sourceName(interfaces.get(i)));
     }
     out.append(" {\n");
     if (model.isEnum()) { out.append(indent).append("  ;\n"); }
@@ -428,18 +520,20 @@ final class JavacHeaders {
       out.append(indent).append("  protected ").append(model.simple()).append("() throws java.lang.Throwable { ")
           .append(constructors.get(model.name)).append(" }\n");
     }
-    if (model.isEnum() || model.isRecord()) {
-      // Records and empty enums cannot be abstract. Satisfy retained interface
-      // contracts with throwaway bodies, never additional native declarations.
+    if (interfaceMethods.containsKey(model.name)) {
+      // Keep only declarations needed by retained contracts. These must never
+      // introduce extra native methods or JNI headers.
       for (JniClass.Method method : interfaceMethods.get(model.name)) {
+        boolean concrete = model.isEnum() || model.isRecord();
         out.append(indent).append("  public ");
+        if (!concrete) { out.append("abstract "); }
         out.append(type(Type.getReturnType(method.descriptor))).append(' ').append(method.name).append('(');
         Type[] arguments = Type.getArgumentTypes(method.descriptor);
         for (int i = 0; i < arguments.length; i++) {
           if (i > 0) { out.append(", "); }
           out.append(type(arguments[i])).append(" p").append(i);
         }
-        out.append(") { throw new java.lang.AssertionError(); }\n");
+        out.append(concrete ? ") { throw new java.lang.AssertionError(); }\n" : ");\n");
       }
     }
     if (targets.contains(model.name)) {

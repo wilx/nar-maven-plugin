@@ -251,9 +251,13 @@ noarch area in the target directory.
  resolved. Superclass constructors must have an accessible, source-expressible
  invocation; failures identify the class and constructor candidates. Enclosing
  interfaces retain interface form. Enclosing records retain their record form
- without reconstructing record components. Records and enums receive throwaway
- method bodies where needed to satisfy interface contracts; unrelated methods
- remain omitted. Required contract signature types must be available on the classpath.
+ without reconstructing record components. Overrides needed to resolve conflicting
+ interface methods are retained. Records and enums receive throwaway method bodies
+ where needed to satisfy interface contracts, choosing covariant return types
+ independently of interface order. Redundant interface clauses are omitted so that
+ inherited generic instantiations, such as <<<Comparable<E>>> on an enum, remain
+ authoritative. Unrelated methods remain omitted. Required contract signature types
+ must be available on the classpath.
 
     Temporary sources, throwaway class files, staged headers, compiler arguments and
  diagnostics are kept in <<<target/nar/javac-headers>>> (relative to the configured

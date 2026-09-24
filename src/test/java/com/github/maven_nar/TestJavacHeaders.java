@@ -103,6 +103,77 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testDefaultOverrideAncestryAndUnrelatedMissingTypes() throws Exception {
+    compile(classes, expected,
+        "Missing.java", "public class Missing {}",
+        "Root.java", "public interface Root { default int value() { return 1; } default Missing ignored() { return null; } }",
+        "Left.java", "public interface Left extends Root { default int value() { return 2; } }",
+        "Right.java", "public interface Right extends Root {}",
+        "Required.java", "public interface Required extends Left { int value(); }",
+        "Api.java", "public class Api implements Right, Left { public native void call(); }",
+        "Reverse.java", "public class Reverse implements Left, Right { public native void call(); }",
+        "PerConstant.java", "public enum PerConstant implements Required { VALUE { public int value() { return 3; } }; public native void call(); }");
+    Files.delete(new File(classes, "Missing.class").toPath());
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testDefaultConflictThroughSuperclassAndSupportingDeclarations() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left { default int value() { return 1; } }",
+        "Right.java", "public interface Right { default int value() { return 2; } }",
+        "Base.java", "public class Base implements Left { public final int value() { return 3; } }",
+        "Api.java", "public class Api extends Base implements Right { public native void call(); }",
+        "Native.java", "public class Native implements Left, Right { public native int value(); }",
+        "Outer.java", "public class Outer implements Left, Right { public int value() { return 3; }"
+        + " public static class Api extends Outer { public native void call(); } }",
+        "Enclosing.java", "public interface Enclosing extends Left, Right { int value();"
+        + " public class Api { public native Enclosing call(); } }",
+        "Broad.java", "public class Broad { public Object text() { return null; } }",
+        "First.java", "public interface First { default String text() { return null; } }",
+        "Second.java", "public interface Second { default String text() { return null; } }",
+        "Narrow.java", "public class Narrow extends Broad implements First, Second {"
+        + " public String text() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRedundantGenericSuperinterfaces() throws Exception {
+    compile(classes, expected,
+        "Value.java", "public interface Value<T> { T value(); }",
+        "Text.java", "public interface Text extends Value<String> {}",
+        "Api.java", "public abstract class Api implements Value<String>, Text { public native void call(); }",
+        "Reverse.java", "public abstract class Reverse implements Text, Value<String> { public native void call(); }",
+        "Base.java", "public abstract class Base implements Text {}",
+        "Inherited.java", "public abstract class Inherited extends Base implements Value<String>, Text { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testCovariantArrayAndInterfaceContracts() throws Exception {
+    compile(classes, expected,
+        "Narrow.java", "public interface Narrow { String[][] items(); java.util.List value(); }",
+        "Wide.java", "public interface Wide { Object[] items(); java.util.Collection value(); }",
+        "Api.java", "public enum Api implements Narrow, Wide { VALUE { public String[][] items() { return null; }"
+        + " public java.util.List value() { return null; } }; public native void call(); }",
+        "Reverse.java", "public enum Reverse implements Wide, Narrow { VALUE { public String[][] items() { return null; }"
+        + " public java.util.List value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRecordResolvesDefaultConflict() throws Exception {
+    String version = System.getProperty("java.specification.version");
+    if (version.startsWith("1.") || Integer.parseInt(version) < 16) { return; }
+    compile(classes, expected,
+        "Left.java", "public interface Left { default int value() { return 1; } }",
+        "Right.java", "public interface Right { default int value() { return 2; } }",
+        "Container.java", "public record Container(int value) implements Left, Right {"
+        + " public static class Api { public native Container call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testCovariantInterfaceReturn() throws Exception {
     compile(classes, expected,
       "Marker.java", "public interface Marker {}",
