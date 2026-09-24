@@ -59,6 +59,38 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testEnumArgumentBoundOnGeneratedClass() throws Exception {
+    compile(classes, expected,
+        "Bound.java", "public interface Bound<T extends Comparable<T>> {}",
+        "Payload.java", "public class Payload implements Comparable<Payload> { public int compareTo(Payload p) { return 0; } public native void call(); }",
+        "Api.java", "public enum Api implements Bound<Payload> { VALUE; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testSupportingInterfaceGenericMethodConflict() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left<T> { default <U extends T> U value(U input) { return null; } }",
+        "Right.java", "public interface Right<T> { <U extends T> U value(U input); }",
+        "Outer.java", "public class Outer { public interface Contract<T extends CharSequence> extends Left<T>, Right<T> { <U extends T> U value(U input); }"
+        + " public enum Api implements Contract<String> { VALUE { public <U extends String> U value(U input) { return null; } }; public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testSupportingInterfaceSelfBound() throws Exception {
+    compile(classes, expected,
+        "Outer.java", "public class Outer { public interface Ordered<T extends Ordered<T>> extends Comparable<T> {}"
+        + " public enum Api implements Ordered<Api> { VALUE; public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testEnumNestedWildcardArguments() throws Exception {
+    compile(classes, expected,
+        "Sink.java", "public interface Sink<T> { void accept(T input); }",
+        "Api.java", "public enum Api implements Sink<java.util.List<? super String>> { VALUE { public void accept(java.util.List<? super String> input) {} }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testGenericEnumInterface() throws Exception {
     compile(classes, expected,
         "Ordered.java", "public interface Ordered<T> extends Comparable<T> {}",
