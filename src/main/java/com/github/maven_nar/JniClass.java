@@ -32,6 +32,7 @@ import org.objectweb.asm.Opcodes;
 final class JniClass extends ClassVisitor {
   String name;
   String parent;
+  final List<String> interfaces = new ArrayList<String>();
   int access;
   boolean platform;
   boolean local;
@@ -40,6 +41,7 @@ final class JniClass extends ClassVisitor {
   final Map<String, Member> members = new LinkedHashMap<String, Member>();
   final List<Field> constants = new ArrayList<Field>();
   final List<Method> natives = new ArrayList<Method>();
+  final List<Method> instanceMethods = new ArrayList<Method>();
   final List<Method> constructors = new ArrayList<Method>();
 
   JniClass() { super(Opcodes.ASM9); }
@@ -48,6 +50,7 @@ final class JniClass extends ClassVisitor {
   public void visit(int version, int flags, String binaryName, String signature, String superName, String[] interfaces) {
     name = binaryName;
     parent = superName;
+    if (interfaces != null) { java.util.Collections.addAll(this.interfaces, interfaces); }
     access = flags;
   }
 
@@ -79,6 +82,8 @@ final class JniClass extends ClassVisitor {
   @Override
   public MethodVisitor visitMethod(int flags, String method, String descriptor, String signature, String[] exceptions) {
     Method entry = new Method(flags, method, descriptor);
+    if ((flags & (Opcodes.ACC_STATIC | Opcodes.ACC_PRIVATE)) == 0
+        && !method.startsWith("<")) { instanceMethods.add(entry); }
     if ((flags & Opcodes.ACC_NATIVE) != 0) { natives.add(entry); }
     if ("<init>".equals(method)) { constructors.add(entry); }
     return null;

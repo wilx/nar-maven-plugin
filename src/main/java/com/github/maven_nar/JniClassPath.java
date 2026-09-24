@@ -23,7 +23,9 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.MalformedURLException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.DirectoryStream;
@@ -39,6 +41,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.StringTokenizer;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -127,23 +130,26 @@ final class JniClassPath implements Closeable {
   }
 
   private JniClass find(List<File> paths, String name, boolean isPlatform) throws IOException {
+    return find(paths, name, isPlatform, new HashSet<File>());
+  }
+
+  private JniClass find(List<File> paths, String name, boolean isPlatform, Set<File> visited) throws IOException {
     for (File path : paths) {
+      if (!visited.add(path.getCanonicalFile())) { continue; }
       if (path.isDirectory()) {
         File file = new File(path, name + ".class");
         if (file.isFile()) {
           try (InputStream in = Files.newInputStream(file.toPath())) { return read(in, isPlatform); }
         }
       } else if (path.isFile()) {
+        Manifest attributes = null;
         try (ZipFile zip = new ZipFile(path)) {
           String resource = (path.getName().endsWith(".jmod") ? "classes/" : "") + name + ".class";
           ZipEntry entry = zip.getEntry(resource);
           ZipEntry manifest = zip.getEntry("META-INF/MANIFEST.MF");
-          if (!isPlatform && release >= 9 && manifest != null) {
-            boolean multiRelease;
-            try (InputStream in = zip.getInputStream(manifest)) {
-              multiRelease = "true".equalsIgnoreCase(new Manifest(in).getMainAttributes().getValue("Multi-Release"));
-            }
-            if (multiRelease) {
+          if (!isPlatform && manifest != null) {
+            try (InputStream in = zip.getInputStream(manifest)) { attributes = new Manifest(in); }
+            if (release >= 9 && "true".equalsIgnoreCase(attributes.getMainAttributes().getValue("Multi-Release"))) {
               for (int version = release; version >= 9; version--) {
                 ZipEntry candidate = zip.getEntry("META-INF/versions/" + version + "/" + resource);
                 if (candidate != null) { entry = candidate; break; }
@@ -152,6 +158,38 @@ final class JniClassPath implements Closeable {
           }
           if (entry != null) {
             try (InputStream in = zip.getInputStream(entry)) { return read(in, isPlatform); }
+          }
+        }
+        // Manifest entries immediately follow their containing JAR, including
+        // transitive entries. Share visited paths across the complete search.
+        if (attributes != null) {
+          String classPath = attributes.getMainAttributes().getValue("Class-Path");
+          if (classPath != null) {
+            List<File> dependencies = new ArrayList<File>();
+            StringTokenizer tokens = new StringTokenizer(classPath);
+            while (tokens.hasMoreTokens()) {
+              String token = tokens.nextToken();
+              // JDK 8-10 javac treats manifest entries as file names, not URLs.
+              if (release < 11) {
+                File entry = new File(token);
+                dependencies.add(release == 8 || !entry.isAbsolute() ? new File(path.getParentFile(), token) : entry);
+                continue;
+              }
+              try {
+                URL url = new URL(path.toURI().toURL(), token);
+                URI entry = url.toURI();
+                // javac's file classpath supports local JARs and directories.
+                // Never fetch remote URLs while reading application metadata.
+                if (!entry.isOpaque() && "file".equalsIgnoreCase(entry.getScheme()) && entry.getAuthority() == null
+                    && entry.getQuery() == null && entry.getFragment() == null) {
+                  dependencies.add(new File(entry));
+                }
+              } catch (MalformedURLException | URISyntaxException ex) {
+                // Invalid manifest URLs are ignored, as in the JDK's classpath.
+              }
+            }
+            JniClass found = find(dependencies, name, false, visited);
+            if (found != null) { return found; }
           }
         }
       }

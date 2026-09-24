@@ -24,6 +24,8 @@ assert headers.list().toList().sort() == ['dependency_Container_Api.h', 'depende
 String api = new File(headers, 'dependency_Container_Api.h').text
 assert api.contains('Java_dependency_Container_00024Api_call')
 assert api.contains('jthrowable, jintArray')
+// Covariant return checking needs the dependency API's nested Marker interface.
+assert api.contains('Java_dependency_Container_00024Api_self')
 String constants = new File(headers, 'dependency_Constants.h').text
 assert constants.contains('1234567890123')
 assert !constants.contains('__nar_header')

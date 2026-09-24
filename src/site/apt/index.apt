@@ -225,7 +225,12 @@ noarch area in the target directory.
     The compile classpath supplies dependency types; <<<javah.classPaths>>> can
  replace it explicitly. <<<javah.bootClassPaths>>> is also passed to the compiler
  (subject to that JDK's supported options). The new backend supports directories,
- JARs and multi-release JARs, using the selected compiler's JDK version.
+ JARs and multi-release JARs, using the selected compiler's JDK version. Local
+ JAR and directory entries in a JAR manifest's <<<Class-Path>>> are resolved
+ relative to that JAR and searched immediately after it, including transitive
+ entries. Duplicate entries and cycles are ignored; remote URLs are not fetched.
+ Manifest entries follow the selected compiler: JDK 8-10 treat them as file names,
+ while JDK 11 and later decode file URLs (including percent-encoded spaces).
  With the <<<javac>>> backend, <<<javah.extraClasses>>> uses binary class names
  and works even with no local native classes. In legacy <<<javah>>> mode, extra
  classes are passed to the tool only when local native classes trigger generation.
@@ -240,12 +245,15 @@ noarch area in the target directory.
  JDK types are supported. Missing or source-inexpressible required declarations
  produce errors.
 
-    Only native signatures, primitive constants, containment and superclass metadata
- are reconstructed. Real signature types and superclasses must be available on the
- classpath. Types used only in omitted methods or unrelated fields are not eagerly
+    Native signatures, primitive constants, containment and superclass/interface
+ relationships are reconstructed. Real signature types and superclasses must be
+ available on the classpath. Types used only in omitted methods or unrelated fields are not eagerly
  resolved. Superclass constructors must have an accessible, source-expressible
  invocation; failures identify the class and constructor candidates. Enclosing
- interfaces retain interface form, and enclosing records use supporting class shells.
+ interfaces retain interface form. Enclosing records retain their record form
+ without reconstructing record components. Records and enums receive throwaway
+ method bodies where needed to satisfy interface contracts; unrelated methods
+ remain omitted. Required contract signature types must be available on the classpath.
 
     Temporary sources, throwaway class files, staged headers, compiler arguments and
  diagnostics are kept in <<<target/nar/javac-headers>>> (relative to the configured

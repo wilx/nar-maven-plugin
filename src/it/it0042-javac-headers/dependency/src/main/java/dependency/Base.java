@@ -19,11 +19,6 @@
  */
 package dependency;
 
-public class Container {
-  public interface Marker {}
-
-  public static class Api extends Base implements Marker {
-    public native Api self();
-    public native Throwable call(Throwable problem, int[] values);
-  }
+public class Base {
+  public Container.Marker self() { return null; }
 }

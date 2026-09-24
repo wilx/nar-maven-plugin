@@ -57,6 +57,7 @@ final class JavacHeaders {
   private final Set<String> targets = new TreeSet<String>();
   private final Map<String, JniClass> declarations = new TreeMap<String, JniClass>();
   private final Map<String, String> constructors = new HashMap<String, String>();
+  private final Map<String, List<JniClass.Method>> interfaceMethods = new HashMap<String, List<JniClass.Method>>();
   private final Set<String> references = new HashSet<String>();
 
   JavacHeaders(File javac, File work, List<File> classPath, List<File> bootClassPath, Log log) throws IOException {
@@ -183,7 +184,9 @@ final class JavacHeaders {
     do {
       previous = declarations.size();
       constructors.clear();
+      interfaceMethods.clear();
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) {
+        for (String iface : model.interfaces) { reference(Type.getObjectType(iface)); }
         for (JniClass.Field field : model.constants) { metadata.identifier(field.name, model.name); }
         if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
           hierarchy(model.name, new HashSet<String>());
@@ -198,13 +201,32 @@ final class JavacHeaders {
           }
         }
       }
-      // A source outer hides its classpath members. Retain only members actually
-      // referenced by a signature, superclass or selected constructor.
-      for (String name : new ArrayList<String>(references)) {
-        JniClass model = metadata.resolve(name);
-        if (declarations.containsKey(root(model).name)) { declare(model); }
+      declareReferencedMembers();
+      if (declarations.size() != previous) { continue; }
+      // Establish which interfaces are source stubs before resolving method
+      // contracts: methods omitted from those interfaces need no implementation.
+      for (JniClass model : new ArrayList<JniClass>(declarations.values())) {
+        if (model.isEnum() || model.isRecord()) {
+          List<JniClass.Method> methods = interfaceMethods(model);
+          interfaceMethods.put(model.name, methods);
+          for (JniClass.Method method : methods) {
+            metadata.identifier(method.name, model.name);
+            reference(Type.getReturnType(method.descriptor));
+            for (Type arg : Type.getArgumentTypes(method.descriptor)) { reference(arg); }
+          }
+        }
       }
+      declareReferencedMembers();
     } while (declarations.size() != previous);
+  }
+
+  private void declareReferencedMembers() throws IOException {
+    // A source outer hides its classpath members. Retain only members actually
+    // referenced by a signature, superclass, interface or selected constructor.
+    for (String name : new ArrayList<String>(references)) {
+      JniClass model = metadata.resolve(name);
+      if (declarations.containsKey(root(model).name)) { declare(model); }
+    }
   }
 
   private JniClass root(JniClass model) throws IOException {
@@ -214,9 +236,11 @@ final class JavacHeaders {
   }
 
   private void hierarchy(String name, Set<String> visiting) throws IOException {
-    if (!visiting.add(name)) { throw new IOException("Superclass cycle involving " + name); }
+    if (!visiting.add(name)) { throw new IOException("Inheritance cycle involving " + name); }
     JniClass model = metadata.resolve(name);
+    references.add(name);
     if (model.parent != null) { hierarchy(model.parent, visiting); }
+    for (String iface : model.interfaces) { hierarchy(iface, visiting); }
     visiting.remove(name);
   }
 
@@ -228,6 +252,65 @@ final class JavacHeaders {
       hierarchy(name, new HashSet<String>());
       references.add(name);
     }
+  }
+
+  private static String methodKey(JniClass.Method method) {
+    return method.name + method.descriptor.substring(0, method.descriptor.indexOf(')') + 1);
+  }
+
+  private void interfaceMethods(JniClass model, Map<String, JniClass.Method> methods, Set<String> visited)
+      throws IOException {
+    if (!visited.add(model.name)) { return; }
+    for (String iface : model.interfaces) { interfaceMethods(metadata.resolve(iface), methods, visited); }
+    if (model.isInterface() && !declarations.containsKey(model.name)) {
+      for (JniClass.Method method : model.instanceMethods) {
+        if ((method.access & Opcodes.ACC_ABSTRACT) != 0) { methods.put(methodKey(method), method); }
+        else { methods.remove(methodKey(method)); }
+      }
+    }
+  }
+
+  private List<JniClass.Method> interfaceMethods(JniClass model) throws IOException {
+    Map<String, JniClass.Method> methods = new TreeMap<String, JniClass.Method>();
+    interfaceMethods(model, methods, new HashSet<String>());
+    Map<String, JniClass.Method> implementations = new HashMap<String, JniClass.Method>();
+    for (JniClass.Method method : model.instanceMethods) {
+      String key = methodKey(method);
+      JniClass.Method previous = implementations.get(key);
+      // Prefer the actual covariant return over a compiler-generated bridge.
+      if (previous == null || (previous.access & Opcodes.ACC_BRIDGE) != 0) { implementations.put(key, method); }
+    }
+    List<JniClass.Method> result = new ArrayList<JniClass.Method>();
+    for (Map.Entry<String, JniClass.Method> entry : methods.entrySet()) {
+      JniClass.Method method = implementations.get(entry.getKey());
+      // Do not override concrete superclass methods (notably Enum's final methods).
+      if (method == null && inheritsImplementation(model, entry.getKey())) { continue; }
+      if (method == null) { method = entry.getValue(); }
+      if (targets.contains(model.name) && (method.access & Opcodes.ACC_NATIVE) != 0) { continue; }
+      result.add(method);
+    }
+    return result;
+  }
+
+  private boolean inheritsImplementation(JniClass model, String key) throws IOException {
+    for (String parent = model.parent; parent != null;) {
+      JniClass ancestor = metadata.resolve(parent);
+      for (JniClass.Method method : ancestor.instanceMethods) {
+        if ((method.access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT)) == Opcodes.ACC_PUBLIC
+            && key.equals(methodKey(method))) { return true; }
+      }
+      parent = ancestor.parent;
+    }
+    return false;
+  }
+
+  private boolean hasSealedParent(JniClass model) throws IOException {
+    List<String> parents = new ArrayList<String>(model.interfaces);
+    if (model.parent != null) { parents.add(model.parent); }
+    for (String parent : parents) {
+      if (!declarations.containsKey(parent) && metadata.resolve(parent).sealed) { return true; }
+    }
+    return false;
   }
 
   private String type(Type type) throws IOException {
@@ -317,17 +400,22 @@ final class JavacHeaders {
   private void emit(JniClass model, StringBuilder out, String indent) throws IOException {
     out.append(indent).append(access(model.nesting == null ? model.access : model.nesting.access));
     if (model.outer() != null && (model.nesting.access & Opcodes.ACC_STATIC) != 0) { out.append("static "); }
+    if (!model.isEnum() && !model.isRecord() && hasSealedParent(model)) { out.append("non-sealed "); }
     if (model.isInterface()) { out.append("interface "); }
     else if (model.isEnum()) { out.append("enum "); }
+    else if (model.isRecord()) { out.append("record "); }
     else {
-      if (model.parent != null && !model.isRecord() && !declarations.containsKey(model.parent)
-          && metadata.resolve(model.parent).sealed) { out.append("non-sealed "); }
       out.append("abstract class ");
     }
     out.append(model.simple());
+    if (model.isRecord()) { out.append("()"); }
     if (!model.isInterface() && !model.isEnum() && !model.isRecord()
         && model.parent != null && !"java/lang/Object".equals(model.parent)) {
       out.append(" extends ").append(metadata.sourceName(model.parent));
+    }
+    for (int i = 0; i < model.interfaces.size(); i++) {
+      out.append(i == 0 ? (model.isInterface() ? " extends " : " implements ") : ", ")
+          .append(metadata.sourceName(model.interfaces.get(i)));
     }
     out.append(" {\n");
     if (model.isEnum()) { out.append(indent).append("  ;\n"); }
@@ -336,9 +424,23 @@ final class JavacHeaders {
           .append(type(Type.getType(field.descriptor))).append(' ').append(field.name).append(" = ")
           .append(literal(field)).append(";\n");
     }
-    if (!model.isInterface() && !model.isEnum()) {
+    if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
       out.append(indent).append("  protected ").append(model.simple()).append("() throws java.lang.Throwable { ")
-          .append(model.isRecord() ? "super();" : constructors.get(model.name)).append(" }\n");
+          .append(constructors.get(model.name)).append(" }\n");
+    }
+    if (model.isEnum() || model.isRecord()) {
+      // Records and empty enums cannot be abstract. Satisfy retained interface
+      // contracts with throwaway bodies, never additional native declarations.
+      for (JniClass.Method method : interfaceMethods.get(model.name)) {
+        out.append(indent).append("  public ");
+        out.append(type(Type.getReturnType(method.descriptor))).append(' ').append(method.name).append('(');
+        Type[] arguments = Type.getArgumentTypes(method.descriptor);
+        for (int i = 0; i < arguments.length; i++) {
+          if (i > 0) { out.append(", "); }
+          out.append(type(arguments[i])).append(" p").append(i);
+        }
+        out.append(") { throw new java.lang.AssertionError(); }\n");
+      }
     }
     if (targets.contains(model.name)) {
       for (JniClass.Method method : model.natives) {
@@ -359,7 +461,10 @@ final class JavacHeaders {
         while (fields.contains(marker)) { marker += "_"; }
         out.append(indent).append("  @java.lang.annotation.Native ");
         if (model.isInterface()) { out.append("int ").append(marker).append(" = new java.lang.Object().hashCode()"); }
-        else { out.append("int ").append(marker); }
+        else {
+          if (model.isRecord()) { out.append("static "); }
+          out.append("int ").append(marker);
+        }
         out.append(";\n");
       }
     }

@@ -106,6 +106,124 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testCovariantNestedInterfaceReturnWithUnrelatedMissingType() throws Exception {
+    compile(classes, expected,
+        "Missing.java", "public class Missing {}",
+        "Root.java", "public interface Root { Missing ignored(); }",
+        "Base.java", "public class Base { public Root call() { return null; } }",
+        "Outer.java", "public class Outer { public interface Marker extends Root {}"
+        + " public abstract static class Api extends Base implements Marker { public native Api call(); } }");
+    Files.delete(new File(classes, "Missing.class").toPath());
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testEnumInterfaceContract() throws Exception {
+    compile(classes, expected,
+        "Api.java", "public enum Api implements Runnable { VALUE; public void run() {} public native Api call(); }",
+        "PerConstant.java", "public enum PerConstant implements Runnable { VALUE { public void run() {} }; public native void call(); }",
+        "Identity.java", "public interface Identity { boolean equals(Object o); int hashCode(); }",
+        "Inherited.java", "public enum Inherited implements Identity { VALUE; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRecordInterfaceContractAndConstantOnlyTarget() throws Exception {
+    String version = System.getProperty("java.specification.version");
+    if (version.startsWith("1.") || Integer.parseInt(version) < 16) { return; }
+    compile(classes, expected,
+        "Base.java", "public class Base { public java.util.function.IntSupplier call() { return null; } }",
+        "Container.java", "public record Container(int value) implements java.util.function.IntSupplier, java.util.function.Supplier<String> {"
+        + " @java.lang.annotation.Native public static final int VALUE=42; public int getAsInt() { return value; }"
+        + " public String get() { return Integer.toString(value); }"
+        + " public static class Api extends Base { public native Container call(); } }");
+    generate(classes, Arrays.asList(classes), set("Container"), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSealedInterfaceOnModernJdk() throws Exception {
+    String version = System.getProperty("java.specification.version");
+    if (version.startsWith("1.") || Integer.parseInt(version) < 17) { return; }
+    compile(classes, expected,
+        "Marker.java", "public sealed interface Marker permits Api {}",
+        "Base.java", "public class Base { public Marker call() { return null; } }",
+        "Api.java", "public final class Api extends Base implements Marker { public native Api call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testManifestClassPathOrderAndCycles() throws Exception {
+    File dependency = directory("dependency");
+    compile(dependency, null, "dep/Base.java", "package dep; public class Base { public static final int VALUE=1; protected Base(String value) {} }");
+    boolean modern = compilerRelease() >= 11;
+    jar(modern ? "dependency one.jar" : "dependency.jar", dependency, "library.jar");
+    File other = directory("other");
+    compile(other, null, "dep/Base.java", "package dep; public class Base { public static final int VALUE=2; protected Base(int value) {} }");
+    File otherJar = jar("other.jar", other, null);
+    File empty = directory("empty");
+    File library = jar("library.jar", empty, "bridge.jar missing.jar bridge.jar");
+    jar("bridge.jar", empty, "library.jar " + (modern ? "dependency%20one.jar" : "dependency.jar"));
+    // A transitive manifest entry precedes later explicit entries, but never earlier ones.
+    for (List<File> paths : Arrays.asList(Arrays.asList(library, otherJar), Arrays.asList(otherJar, library))) {
+      compileWithPath(classes, expected, paths, "Api.java", "public class Api extends dep.Base {"
+          + " public Api() { super(" + (paths.get(0).equals(library) ? "null" : "0") + "); } public native void call(); }");
+      List<File> classpath = new ArrayList<File>(Arrays.asList(classes));
+      classpath.addAll(paths);
+      generate(classes, classpath, Collections.<String>emptySet(), Collections.<String>emptySet());
+      equalHeaders();
+    }
+    // The containing JAR is searched before its own manifest entries.
+    jar("library.jar", other, "bridge.jar");
+    compileWithPath(classes, expected, Arrays.asList(library), "Api.java", "public class Api extends dep.Base {"
+        + " public Api() { super(0); } public native void call(); }");
+    generate(classes, Arrays.asList(classes, library), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testManifestDirectoryClassPath() throws Exception {
+    boolean modern = compilerRelease() >= 11;
+    File dependency = directory(modern ? "dependency classes" : "dependency");
+    compile(dependency, null, "dep/Base.java", "package dep; public class Base {}");
+    File library = jar("library.jar", directory("empty"), modern ? "dependency%20classes/" : "dependency/");
+    compileWithPath(classes, expected, Arrays.asList(library), "Api.java", "public class Api extends dep.Base { public native void call(); }");
+    generate(classes, Arrays.asList(classes, library), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRecordSupportingInterfaceOmitsUnrelatedMembers() throws Exception {
+    if (compilerRelease() < 16) { return; }
+    compile(classes, expected,
+        "Missing.java", "public class Missing {}",
+        "Outer.java", "public class Outer { public interface Value { Missing ignored(); }"
+        + " public record Container(Missing value) implements Value { public Missing ignored() { return value; } }"
+        + " public static class Api { public native Container call(); } }");
+    Files.delete(new File(classes, "Missing.class").toPath());
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testManifestPathsUseSelectedCompilerVersion() throws Exception {
+    File literal = directory("literal");
+    File decoded = directory("decoded");
+    compile(literal, null, "Api.java", "public class Api { public static final int VALUE=8; }");
+    compile(decoded, null, "Api.java", "public class Api { public static final int VALUE=11; }");
+    jar("dependency%20one.jar", literal, null);
+    jar("dependency one.jar", decoded, null);
+    File library = jar("library.jar", directory("empty"), "dependency%20one.jar");
+    File javaHome = TestJavah.jdkTool("javac").getCanonicalFile().getParentFile().getParentFile();
+    for (int release : new int[] {8, 9, 10, 11, 21}) {
+      try (JniClassPath metadata = new JniClassPath(Arrays.asList(library), javaHome, release)) {
+        assertEquals("Manifest interpretation for compiler JDK " + release,
+            Integer.valueOf(release < 11 ? 8 : 11), metadata.resolve("Api").constants.get(0).value);
+      }
+    }
+  }
+
+  private static int compilerRelease() {
+    String version = System.getProperty("java.specification.version");
+    return Integer.parseInt(version.startsWith("1.") ? version.substring(2) : version);
+  }
+
   public void testNestedDeclarationsAndSignatures() throws Exception {
     compile(classes, expected,
         "p/Outer.java", "package p; public class Outer {"
@@ -258,6 +376,9 @@ public class TestJavacHeaders extends TestCase {
     boolean modern = !System.getProperty("java.specification.version").startsWith("1.");
     assertTrue(header.contains("#define Api_VERSION " + (modern ? "9L" : "8L")));
     assertTrue(header.contains(modern ? "jlong" : "jint"));
+    File wrapper = jar("wrapper.jar", directory("empty"), "dependency.jar");
+    generate(classes, Arrays.asList(wrapper), set("Api"), Collections.<String>emptySet());
+    assertEquals("Manifest lookup retains the selected multi-release view", header, text(new File(actual, "Api.h")));
   }
 
   public void testEnclosingRecordOnModernJdk() throws Exception {
@@ -419,6 +540,17 @@ public class TestJavacHeaders extends TestCase {
     try (OutputStream stream = Files.newOutputStream(jar.toPath()); JarOutputStream out = new JarOutputStream(stream, manifest)) {
       addJarClasses(out, base, "");
       if (versioned != null) { addJarClasses(out, versioned, "META-INF/versions/9/"); }
+    }
+    return jar;
+  }
+
+  private File jar(String name, File base, String classPath) throws Exception {
+    File jar = new File(work, name);
+    Manifest manifest = new Manifest();
+    manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+    if (classPath != null) { manifest.getMainAttributes().put(Attributes.Name.CLASS_PATH, classPath); }
+    try (OutputStream stream = Files.newOutputStream(jar.toPath()); JarOutputStream out = new JarOutputStream(stream, manifest)) {
+      addJarClasses(out, base, "");
     }
     return jar;
   }
