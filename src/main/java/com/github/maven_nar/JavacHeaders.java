@@ -221,6 +221,15 @@ final class JavacHeaders {
             metadata.identifier(method.name, model.name);
             reference(Type.getReturnType(method.descriptor));
             for (Type arg : Type.getArgumentTypes(method.descriptor)) { reference(arg); }
+            if (method.signature != null) {
+              JniSignature source = JniSignature.read(method.signature);
+              for (Map.Entry<String, List<JniSignature.Value>> formal : source.bounds.entrySet()) {
+                metadata.identifier(formal.getKey(), model.name + "." + method.name);
+                for (JniSignature.Value bound : formal.getValue()) { reference(sourceType(bound)); }
+              }
+              reference(sourceType(source.result));
+              for (JniSignature.Value arg : source.parameters) { reference(sourceType(arg)); }
+            }
           }
         }
       }
@@ -333,9 +342,9 @@ final class JavacHeaders {
     List<JniSignature.Value> result = new ArrayList<JniSignature.Value>();
     for (String name : directInterfaces(type.model)) {
       JniSignature.Value value = JniSignature.Value.object(name);
-      // Enums need their original arguments to agree with Enum<Self>. Supporting
-      // interfaces retain their formals so parameterized member interfaces work too.
-      if (!type.raw && (type.model.isEnum() || type.model.isInterface())) {
+      // Every non-raw declaration needs its interface arguments: another
+      // generated type can use this class to satisfy a parameterized bound.
+      if (!type.raw) {
         for (JniSignature.Value parent : signature(type.model).parents) {
           if (name.equals(parent.name)) { value = sourceType(parent.substitute(type.arguments)); break; }
         }
@@ -600,6 +609,20 @@ final class JavacHeaders {
     return "(" + type(type) + ") 0";
   }
 
+  private void emitFormals(JniSignature signature, StringBuilder out) throws IOException {
+    if (signature.bounds.isEmpty()) { return; }
+    out.append('<');
+    int parameter = 0;
+    for (Map.Entry<String, List<JniSignature.Value>> formal : signature.bounds.entrySet()) {
+      if (parameter++ != 0) { out.append(", "); }
+      out.append(formal.getKey());
+      for (int i = 0; i < formal.getValue().size(); i++) {
+        out.append(i == 0 ? " extends " : " & ").append(sourceType(formal.getValue().get(i)).source(metadata));
+      }
+    }
+    out.append('>');
+  }
+
   private void emit(JniClass model, StringBuilder out, String indent) throws IOException {
     out.append(indent).append(access(model.nesting == null ? model.access : model.nesting.access));
     if (model.outer() != null && (model.nesting.access & Opcodes.ACC_STATIC) != 0) { out.append("static "); }
@@ -611,18 +634,7 @@ final class JavacHeaders {
       out.append("abstract class ");
     }
     out.append(model.simple());
-    if (model.isInterface() && !signature(model).bounds.isEmpty()) {
-      out.append('<');
-      int parameter = 0;
-      for (Map.Entry<String, List<JniSignature.Value>> formal : signature(model).bounds.entrySet()) {
-        if (parameter++ != 0) { out.append(", "); }
-        out.append(formal.getKey());
-        for (int i = 0; i < formal.getValue().size(); i++) {
-          out.append(i == 0 ? " extends " : " & ").append(sourceType(formal.getValue().get(i)).source(metadata));
-        }
-      }
-      out.append('>');
-    }
+    if (model.isInterface()) { emitFormals(signature(model), out); }
     if (model.isRecord()) { out.append("()"); }
     if (!model.isInterface() && !model.isEnum() && !model.isRecord()
         && model.parent != null && !"java/lang/Object".equals(model.parent)) {
@@ -652,12 +664,13 @@ final class JavacHeaders {
         out.append(indent).append("  public ");
         if (!concrete) { out.append("abstract "); }
         JniSignature source = method.signature == null ? null : JniSignature.read(method.signature);
-        out.append(source == null ? type(Type.getReturnType(method.descriptor)) : source.result.source(metadata))
+        if (source != null && !source.bounds.isEmpty()) { emitFormals(source, out); out.append(' '); }
+        out.append(source == null ? type(Type.getReturnType(method.descriptor)) : sourceType(source.result).source(metadata))
             .append(' ').append(method.name).append('(');
         Type[] arguments = Type.getArgumentTypes(method.descriptor);
         for (int i = 0; i < arguments.length; i++) {
           if (i > 0) { out.append(", "); }
-          out.append(source == null ? type(arguments[i]) : source.parameters.get(i).source(metadata)).append(" p").append(i);
+          out.append(source == null ? type(arguments[i]) : sourceType(source.parameters.get(i)).source(metadata)).append(" p").append(i);
         }
         out.append(concrete ? ") { throw new java.lang.AssertionError(); }\n" : ");\n");
       }

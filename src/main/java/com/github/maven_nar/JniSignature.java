@@ -82,11 +82,15 @@ final class JniSignature extends SignatureVisitor {
   }
 
   Map<String, Value> variables() {
+    return variables(java.util.Collections.<String, Value>emptyMap());
+  }
+
+  private Map<String, Value> variables(Map<String, Value> scope) {
     Map<String, Value> result = new LinkedHashMap<String, Value>();
     for (String name : bounds.keySet()) {
       Value value = new Value();
       value.variable = name;
-      value.erasure = value.substitute(java.util.Collections.<String, Value>emptyMap(), bounds,
+      value.erasure = value.substitute(scope, bounds,
           new HashSet<String>()).erase();
       result.put(name, value);
     }
@@ -97,14 +101,27 @@ final class JniSignature extends SignatureVisitor {
     Map<String, Value> scope = new HashMap<String, Value>(arguments);
     // A method type parameter shadows a class/interface parameter of the same name.
     for (String variable : bounds.keySet()) { scope.remove(variable); }
+    // Keep source variables symbolic, with their specialized erasures recorded
+    // separately for method matching. Erasing <U extends T> to T in the source
+    // does not necessarily override the original generic method.
+    scope.putAll(variables(scope));
     Type[] args = new Type[parameters.size()];
-    StringBuilder source = new StringBuilder("(");
+    StringBuilder source = new StringBuilder();
+    if (!bounds.isEmpty()) {
+      source.append('<');
+      for (Map.Entry<String, List<Value>> formal : bounds.entrySet()) {
+        source.append(formal.getKey());
+        for (Value bound : formal.getValue()) { source.append(':').append(bound.substitute(scope).methodSignature()); }
+      }
+      source.append('>');
+    }
+    source.append('(');
     for (int i = 0; i < args.length; i++) {
-      Value value = parameters.get(i).substitute(scope, bounds, new HashSet<String>());
+      Value value = parameters.get(i).substitute(scope);
       args[i] = value.erase();
       source.append(value.methodSignature());
     }
-    Value returns = result.substitute(scope, bounds, new HashSet<String>());
+    Value returns = result.substitute(scope);
     source.append(')').append(returns.methodSignature());
     return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString());
   }
@@ -184,11 +201,23 @@ final class JniSignature extends SignatureVisitor {
     }
 
     private String methodSignature() {
-      // Supporting methods can erase parameterized types, but a declaration's
-      // own type variables must remain variables (e.g. Supplier<T>.get(): T).
-      if (variable != null) { return "T" + variable + ";"; }
-      if (component != null) { return "[" + component.methodSignature(); }
-      return erase().getDescriptor();
+      if (wildcard == '*') { return "*"; }
+      String prefix = wildcard == '=' ? "" : String.valueOf(wildcard);
+      if (variable != null) { return prefix + "T" + variable + ";"; }
+      if (component != null) { return prefix + "[" + component.methodSignature(); }
+      if (name == null) { return prefix + erase().getDescriptor(); }
+      StringBuilder text = new StringBuilder(prefix);
+      if (owner == null) { text.append('L').append(name); }
+      else {
+        String enclosing = owner.methodSignature();
+        text.append(enclosing, 0, enclosing.length() - 1).append('.').append(name.substring(owner.name.length() + 1));
+      }
+      if (!arguments.isEmpty()) {
+        text.append('<');
+        for (Value argument : arguments) { text.append(argument.methodSignature()); }
+        text.append('>');
+      }
+      return text.append(';').toString();
     }
 
     Value eraseArguments(Set<String> rawNames) {

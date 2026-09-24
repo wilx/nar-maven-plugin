@@ -91,6 +91,48 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testSupportingGenericMethodChainedBounds() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left<T> { default <U extends T, V extends U> V value(V input) { return null; } }",
+        "Right.java", "public interface Right<T> { <U extends T, V extends U> V value(V input); }",
+        "Outer.java", "public class Outer { public interface Contract<T extends CharSequence> extends Left<T>, Right<T> {"
+        + " <U extends T, V extends U> V value(V input); }"
+        + " public enum Api implements Contract<String> { VALUE {"
+        + " public <U extends String, V extends U> V value(V input) { return null; } }; public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSupportingGenericMethodIntersectionAndShadowing() throws Exception {
+    String method = "<T extends Number & Outer.Marker & Comparable<T>> T[] value(java.util.List<? super T> input, T[] array)";
+    compile(classes, expected,
+        "Missing.java", "public class Missing {}",
+        "Left.java", "public interface Left<T> { default " + method + " { return null; }"
+        + " default <U extends Missing> U unrelated() { return null; } }",
+        "Right.java", "public interface Right<T> { " + method + "; }",
+        "Outer.java", "public class Outer { public interface Marker {}"
+        + " public interface Contract<T> extends Left<T>, Right<T> { " + method + "; }"
+        + " public enum Api implements Contract<String> { VALUE { public " + method + " { return null; } };"
+        + " public native void call(); } }");
+    Files.delete(new File(classes, "Missing.class").toPath());
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSupportingGenericMethodParameterizedOwner() throws Exception {
+    String method = "<U extends T> Box<T>.Value<U> value(Box<T>.Value<? extends U> input)";
+    compile(classes, expected,
+        "Box.java", "public class Box<T> { public class Value<U> {} }",
+        "Left.java", "public interface Left<T> { default " + method + " { return null; } }",
+        "Right.java", "public interface Right<T> { " + method + "; }",
+        "Outer.java", "public class Outer { public interface Contract<T extends CharSequence> extends Left<T>, Right<T> { "
+        + method + "; } public enum Api implements Contract<String> { VALUE {"
+        + " public <U extends String> Box<String>.Value<U> value(Box<String>.Value<? extends U> input) { return null; } };"
+        + " public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testGenericEnumInterface() throws Exception {
     compile(classes, expected,
         "Ordered.java", "public interface Ordered<T> extends Comparable<T> {}",

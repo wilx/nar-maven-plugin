@@ -20,7 +20,7 @@
 // There are no native source declarations in the consumer; all headers must
 // therefore come from the dependency's compiled classes.
 File headers = new File(basedir, 'consumer/target/nar/javah-include')
-assert headers.list().toList().sort() == ['dependency_Container_Api.h', 'dependency_Constants.h', 'dependency_GenericApi.h'].sort()
+assert headers.list().toList().sort() == ['dependency_Container_Api.h', 'dependency_Constants.h', 'dependency_GenericApi.h', 'dependency_Payload.h'].sort()
 String api = new File(headers, 'dependency_Container_Api.h').text
 assert api.contains('Java_dependency_Container_00024Api_call')
 assert api.contains('jthrowable, jintArray')
@@ -34,6 +34,12 @@ assert generic.contains('Java_dependency_GenericApi_call')
 assert !generic.contains('Java_dependency_GenericApi_get')
 // Ordered<GenericApi> must use Enum's inherited comparison, without a new native method.
 assert !generic.contains('Java_dependency_GenericApi_compareTo')
+// Contract's generic override resolves the abstract/default conflict without a JNI entry.
+assert !generic.contains('Java_dependency_GenericApi_value')
+// Both classes are generated together; Bound<Payload> requires Comparable<Payload>.
+String payload = new File(headers, 'dependency_Payload.h').text
+assert payload.contains('Java_dependency_Payload_call')
+assert !payload.contains('Java_dependency_Payload_compareTo')
 String constants = new File(headers, 'dependency_Constants.h').text
 assert constants.contains('1234567890123')
 assert !constants.contains('__nar_header')

@@ -22,6 +22,12 @@ package dependency;
 public class Container {
   public interface Marker {}
 
+  public interface Bound<T extends Comparable<T>> {}
+
+  public interface Contract<T extends CharSequence> extends Left<T>, Right<T> {
+    <U extends T> U value(U input);
+  }
+
   public static class Api extends Base implements Marker {
     public native Api self();
     public native Throwable call(Throwable problem, int[] values);
