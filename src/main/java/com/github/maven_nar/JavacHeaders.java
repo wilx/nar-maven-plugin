@@ -188,6 +188,13 @@ final class JavacHeaders {
       interfaceMethods.clear();
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) {
         for (String iface : model.interfaces) { reference(Type.getObjectType(iface)); }
+        for (JniSignature.Value iface : emittedInterfaces(declarationView(model))) { reference(iface); }
+        if (model.isInterface()) {
+          for (Map.Entry<String, List<JniSignature.Value>> formal : signature(model).bounds.entrySet()) {
+            metadata.identifier(formal.getKey(), model.name);
+            for (JniSignature.Value bound : formal.getValue()) { reference(sourceType(bound)); }
+          }
+        }
         for (JniClass.Field field : model.constants) { metadata.identifier(field.name, model.name); }
         if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
           hierarchy(model.name, new HashSet<String>());
@@ -269,14 +276,17 @@ final class JavacHeaders {
   /** The effective type as javac sees it, after any generated declaration erases its own generics. */
   private static final class TypeView {
     final JniClass model;
-    final Map<String, Type> arguments;
+    final Map<String, JniSignature.Value> arguments;
     final boolean raw;
-    TypeView(JniClass model, Map<String, Type> arguments, boolean raw) {
+    TypeView(JniClass model, Map<String, JniSignature.Value> arguments, boolean raw) {
       this.model = model; this.arguments = arguments; this.raw = raw;
     }
     String key() { return model.name + ":" + raw + arguments; }
     JniClass.Method method(JniClass.Method method) {
-      return raw || method.signature == null ? method : JniSignature.read(method.signature).method(method, arguments);
+      // A raw receiver also erases the source signature; its type variables
+      // are not in scope in a generated declaration.
+      if (raw) { return new JniClass.Method(method.access, method.name, method.descriptor); }
+      return method.signature == null ? method : JniSignature.read(method.signature).method(method, arguments);
     }
   }
 
@@ -286,42 +296,82 @@ final class JavacHeaders {
     return signature;
   }
 
-  private TypeView view(String name, List<Type> arguments) throws IOException {
-    JniClass model = metadata.resolve(name);
+  private TypeView view(JniSignature.Value value) throws IOException {
+    JniClass model = metadata.resolve(value.name);
     JniSignature signature = signature(model);
-    if (arguments.isEmpty()) {
-      return new TypeView(model, Collections.<String, Type>emptyMap(), !signature.bounds.isEmpty());
+    Map<String, JniSignature.Value> scope = new java.util.LinkedHashMap<String, JniSignature.Value>();
+    boolean raw = false;
+    if (model.innerInstance()) {
+      TypeView enclosing = value.owner == null ? rawView(model.outer()) : view(value.owner);
+      scope.putAll(enclosing.arguments);
+      raw = enclosing.raw;
     }
-    if (arguments.size() != signature.bounds.size()) {
-      throw new IOException("Inconsistent generic type arguments for " + name);
+    if (value.arguments.isEmpty()) { raw |= !signature.bounds.isEmpty(); }
+    else {
+      if (value.arguments.size() != signature.bounds.size()) {
+        throw new IOException("Inconsistent generic type arguments for " + model.name);
+      }
+      // Member parameters may shadow an enclosing parameter with the same name.
+      scope.putAll(signature.bind(value.arguments));
     }
-    return new TypeView(model, signature.bind(arguments), false);
+    return new TypeView(model, scope, raw);
   }
 
-  private TypeView rawView(String name) throws IOException { return view(name, Collections.<Type>emptyList()); }
+  private TypeView rawView(String name) throws IOException { return view(JniSignature.Value.object(name)); }
+
+  private TypeView declarationView(JniClass model) throws IOException {
+    return model.isInterface() ? new TypeView(model, signature(model).variables(), false) : rawView(model.name);
+  }
+
+  private JniSignature.Value sourceType(JniSignature.Value value) {
+    Set<String> raw = new HashSet<String>();
+    for (JniClass model : declarations.values()) { if (!model.isInterface()) { raw.add(model.name); } }
+    return value.eraseArguments(raw);
+  }
+
+  private List<JniSignature.Value> emittedInterfaces(TypeView type) throws IOException {
+    List<JniSignature.Value> result = new ArrayList<JniSignature.Value>();
+    for (String name : directInterfaces(type.model)) {
+      JniSignature.Value value = JniSignature.Value.object(name);
+      // Enums need their original arguments to agree with Enum<Self>. Supporting
+      // interfaces retain their formals so parameterized member interfaces work too.
+      if (!type.raw && (type.model.isEnum() || type.model.isInterface())) {
+        for (JniSignature.Value parent : signature(type.model).parents) {
+          if (name.equals(parent.name)) { value = sourceType(parent.substitute(type.arguments)); break; }
+        }
+      }
+      result.add(value);
+    }
+    return result;
+  }
 
   private List<TypeView> parents(TypeView type) throws IOException {
     JniClass model = type.model;
     List<TypeView> result = new ArrayList<TypeView>();
     if (declarations.containsKey(model.name)) {
-      // Match the source we emit, including Enum<Self>'s implicit specialization.
+      // Resolve exactly the types emitted in the source, including Enum<Self>.
       if (model.parent != null) {
-        result.add(model.isEnum() ? view(model.parent, Collections.singletonList(Type.getObjectType(model.name)))
-            : rawView(model.parent));
+        JniSignature.Value parent = JniSignature.Value.object(model.parent);
+        if (model.isEnum()) { parent.arguments.add(JniSignature.Value.object(model.name)); }
+        result.add(view(parent));
       }
-      for (String iface : directInterfaces(model)) { result.add(rawView(iface)); }
+      for (JniSignature.Value iface : emittedInterfaces(type)) { result.add(view(iface)); }
     } else if (type.raw || model.signature == null) {
       // The supertypes of a raw type are themselves erased.
       if (model.parent != null) { result.add(rawView(model.parent)); }
       for (String iface : model.interfaces) { result.add(rawView(iface)); }
     } else {
       for (JniSignature.Value parent : signature(model).parents) {
-        List<Type> arguments = new ArrayList<Type>();
-        for (JniSignature.Value argument : parent.arguments) { arguments.add(argument.erase(type.arguments)); }
-        result.add(view(parent.name, arguments));
+        result.add(view(parent.substitute(type.arguments)));
       }
     }
     return result;
+  }
+
+  private void reference(JniSignature.Value value) throws IOException {
+    Set<String> names = new HashSet<String>();
+    value.classNames(names);
+    for (String name : names) { reference(Type.getObjectType(name)); }
   }
 
   private void interfaceMethods(TypeView type, Map<String, List<Contract>> methods, Set<String> visited)
@@ -343,9 +393,10 @@ final class JavacHeaders {
 
   private List<JniClass.Method> interfaceMethods(JniClass model) throws IOException {
     Map<String, List<Contract>> methods = new TreeMap<String, List<Contract>>();
-    interfaceMethods(rawView(model.name), methods, new HashSet<String>());
+    interfaceMethods(declarationView(model), methods, new HashSet<String>());
     Map<String, JniClass.Method> implementations = new HashMap<String, JniClass.Method>();
-    for (JniClass.Method method : model.instanceMethods) {
+    for (JniClass.Method original : model.instanceMethods) {
+      JniClass.Method method = declarationView(model).method(original);
       // Bridges are bytecode adapters, not source overrides. In particular a
       // bridge may delegate to a narrower (possibly final) superclass method.
       if ((method.access & Opcodes.ACC_BRIDGE) == 0) { implementations.put(methodKey(method), method); }
@@ -560,15 +611,27 @@ final class JavacHeaders {
       out.append("abstract class ");
     }
     out.append(model.simple());
+    if (model.isInterface() && !signature(model).bounds.isEmpty()) {
+      out.append('<');
+      int parameter = 0;
+      for (Map.Entry<String, List<JniSignature.Value>> formal : signature(model).bounds.entrySet()) {
+        if (parameter++ != 0) { out.append(", "); }
+        out.append(formal.getKey());
+        for (int i = 0; i < formal.getValue().size(); i++) {
+          out.append(i == 0 ? " extends " : " & ").append(sourceType(formal.getValue().get(i)).source(metadata));
+        }
+      }
+      out.append('>');
+    }
     if (model.isRecord()) { out.append("()"); }
     if (!model.isInterface() && !model.isEnum() && !model.isRecord()
         && model.parent != null && !"java/lang/Object".equals(model.parent)) {
       out.append(" extends ").append(metadata.sourceName(model.parent));
     }
-    List<String> interfaces = directInterfaces(model);
+    List<JniSignature.Value> interfaces = emittedInterfaces(declarationView(model));
     for (int i = 0; i < interfaces.size(); i++) {
       out.append(i == 0 ? (model.isInterface() ? " extends " : " implements ") : ", ")
-          .append(metadata.sourceName(interfaces.get(i)));
+          .append(interfaces.get(i).source(metadata));
     }
     out.append(" {\n");
     if (model.isEnum()) { out.append(indent).append("  ;\n"); }
@@ -588,11 +651,13 @@ final class JavacHeaders {
         boolean concrete = model.isEnum() || model.isRecord();
         out.append(indent).append("  public ");
         if (!concrete) { out.append("abstract "); }
-        out.append(type(Type.getReturnType(method.descriptor))).append(' ').append(method.name).append('(');
+        JniSignature source = method.signature == null ? null : JniSignature.read(method.signature);
+        out.append(source == null ? type(Type.getReturnType(method.descriptor)) : source.result.source(metadata))
+            .append(' ').append(method.name).append('(');
         Type[] arguments = Type.getArgumentTypes(method.descriptor);
         for (int i = 0; i < arguments.length; i++) {
           if (i > 0) { out.append(", "); }
-          out.append(type(arguments[i])).append(" p").append(i);
+          out.append(source == null ? type(arguments[i]) : source.parameters.get(i).source(metadata)).append(" p").append(i);
         }
         out.append(concrete ? ") { throw new java.lang.AssertionError(); }\n" : ");\n");
       }

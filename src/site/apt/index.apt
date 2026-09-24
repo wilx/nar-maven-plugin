@@ -256,8 +256,10 @@ noarch area in the target directory.
  where needed to satisfy interface contracts, choosing covariant return types
  independently of interface order. Redundant interface clauses are omitted so that
  inherited generic instantiations, such as <<<Comparable<E>>> on an enum, remain
- authoritative. Retained generic contracts are specialized before supporting methods
- are emitted: for example, <<<Supplier<String>.get()>>> needs a <<<String>>> return.
+ authoritative. Enum interface arguments and supporting interface type parameters
+ are retained. Enclosing type arguments are kept separate from member type parameters
+ when matching inherited methods. Retained generic contracts are specialized before
+ supporting methods are emitted: for example, <<<Supplier<String>.get()>>> needs a <<<String>>> return.
  Compiler-generated bridge adapters do not replace source overrides. Native signatures
  remain erased. Unrelated methods remain omitted. Required contract signature types,
  including generic argument types needed by the compiler's inheritance checks, must

@@ -19,10 +19,4 @@
  */
 package dependency;
 
-public enum GenericApi implements Text, Ordered<GenericApi> {
-  VALUE {
-    public String get() { return null; }
-  };
-
-  public native void call();
-}
+public interface Ordered<T> extends Comparable<T> {}

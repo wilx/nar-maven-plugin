@@ -32,6 +32,8 @@ String generic = new File(headers, 'dependency_GenericApi.h').text
 assert generic.contains('Java_dependency_GenericApi_call')
 // The synthesized contract implementation must remain non-native.
 assert !generic.contains('Java_dependency_GenericApi_get')
+// Ordered<GenericApi> must use Enum's inherited comparison, without a new native method.
+assert !generic.contains('Java_dependency_GenericApi_compareTo')
 String constants = new File(headers, 'dependency_Constants.h').text
 assert constants.contains('1234567890123')
 assert !constants.contains('__nar_header')

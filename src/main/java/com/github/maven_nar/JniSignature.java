@@ -19,6 +19,7 @@
  */
 package com.github.maven_nar;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -31,12 +32,12 @@ import org.objectweb.asm.Type;
 import org.objectweb.asm.signature.SignatureReader;
 import org.objectweb.asm.signature.SignatureVisitor;
 
-/** Substitutes retained generic contracts without resolving their signature types. */
+/** Substitutes retained generic contracts without loading their signature types. */
 final class JniSignature extends SignatureVisitor {
   final Map<String, List<Value>> bounds = new LinkedHashMap<String, List<Value>>();
   final List<Value> parents = new ArrayList<Value>();
-  private final List<Value> parameters = new ArrayList<Value>();
-  private Value result;
+  final List<Value> parameters = new ArrayList<Value>();
+  Value result;
   private String formal;
 
   private JniSignature() { super(Opcodes.ASM9); }
@@ -52,7 +53,6 @@ final class JniSignature extends SignatureVisitor {
     formal = name;
     bounds.put(name, new ArrayList<Value>());
   }
-
   @Override
   public SignatureVisitor visitClassBound() { return add(bounds.get(formal)); }
   @Override
@@ -74,34 +74,55 @@ final class JniSignature extends SignatureVisitor {
     return value;
   }
 
-  Map<String, Type> bind(List<Type> arguments) {
-    Map<String, Type> result = new LinkedHashMap<String, Type>();
+  Map<String, Value> bind(List<Value> arguments) {
+    Map<String, Value> result = new LinkedHashMap<String, Value>();
     int index = 0;
     for (String variable : bounds.keySet()) { result.put(variable, arguments.get(index++)); }
     return result;
   }
 
-  JniClass.Method method(JniClass.Method method, Map<String, Type> arguments) {
-    Map<String, Type> scope = new HashMap<String, Type>(arguments);
+  Map<String, Value> variables() {
+    Map<String, Value> result = new LinkedHashMap<String, Value>();
+    for (String name : bounds.keySet()) {
+      Value value = new Value();
+      value.variable = name;
+      value.erasure = value.substitute(java.util.Collections.<String, Value>emptyMap(), bounds,
+          new HashSet<String>()).erase();
+      result.put(name, value);
+    }
+    return result;
+  }
+
+  JniClass.Method method(JniClass.Method method, Map<String, Value> arguments) {
+    Map<String, Value> scope = new HashMap<String, Value>(arguments);
     // A method type parameter shadows a class/interface parameter of the same name.
     for (String variable : bounds.keySet()) { scope.remove(variable); }
     Type[] args = new Type[parameters.size()];
-    for (int i = 0; i < args.length; i++) { args[i] = parameters.get(i).erase(scope, bounds, new HashSet<String>()); }
-    return new JniClass.Method(method.access, method.name,
-        Type.getMethodDescriptor(result.erase(scope, bounds, new HashSet<String>()), args));
+    StringBuilder source = new StringBuilder("(");
+    for (int i = 0; i < args.length; i++) {
+      Value value = parameters.get(i).substitute(scope, bounds, new HashSet<String>());
+      args[i] = value.erase();
+      source.append(value.methodSignature());
+    }
+    Value returns = result.substitute(scope, bounds, new HashSet<String>());
+    source.append(')').append(returns.methodSignature());
+    return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString());
   }
 
   static final class Value extends SignatureVisitor {
     String name;
+    Value owner;
     private String variable;
-    private Type primitive;
+    private Type erasure;
     private Value component;
+    private char wildcard = '=';
     final List<Value> arguments = new ArrayList<Value>();
 
     Value() { super(Opcodes.ASM9); }
+    static Value object(String name) { Value value = new Value(); value.name = name; return value; }
 
     @Override
-    public void visitBaseType(char descriptor) { primitive = Type.getType(String.valueOf(descriptor)); }
+    public void visitBaseType(char descriptor) { erasure = Type.getType(String.valueOf(descriptor)); }
     @Override
     public void visitTypeVariable(String name) { variable = name; }
     @Override
@@ -110,33 +131,107 @@ final class JniSignature extends SignatureVisitor {
     public void visitClassType(String name) { this.name = name; }
     @Override
     public void visitInnerClassType(String name) {
+      Value enclosing = object(this.name);
+      enclosing.owner = owner;
+      enclosing.arguments.addAll(arguments);
+      owner = enclosing;
       this.name += "$" + name;
-      arguments.clear(); // A member type has its own formal type parameters.
+      arguments.clear();
     }
     @Override
-    public void visitTypeArgument() {
-      Value value = add(arguments);
-      value.name = "java/lang/Object";
-    }
+    public void visitTypeArgument() { Value value = add(arguments); value.wildcard = '*'; }
     @Override
-    public SignatureVisitor visitTypeArgument(char wildcard) { return add(arguments); }
-
-    Type erase(Map<String, Type> scope) {
-      return erase(scope, java.util.Collections.<String, List<Value>>emptyMap(), new HashSet<String>());
+    public SignatureVisitor visitTypeArgument(char wildcard) {
+      Value value = add(arguments); value.wildcard = wildcard; return value;
     }
 
-    private Type erase(Map<String, Type> scope, Map<String, List<Value>> bounds, Set<String> visiting) {
-      if (primitive != null) { return primitive; }
-      if (name != null) { return Type.getObjectType(name); }
-      if (component != null) { return Type.getType("[" + component.erase(scope, bounds, visiting).getDescriptor()); }
-      if (scope.containsKey(variable)) { return scope.get(variable); }
-      List<Value> limits = bounds.get(variable);
-      if (limits != null && !limits.isEmpty() && visiting.add(variable)) {
-        Type type = limits.get(0).erase(scope, bounds, visiting);
-        visiting.remove(variable);
-        return type;
+    Value substitute(Map<String, Value> scope) {
+      return substitute(scope, java.util.Collections.<String, List<Value>>emptyMap(), new HashSet<String>());
+    }
+
+    private Value substitute(Map<String, Value> scope, Map<String, List<Value>> bounds, Set<String> visiting) {
+      if (variable != null) {
+        if (scope.containsKey(variable)) { return scope.get(variable).withWildcard(wildcard); }
+        List<Value> limits = bounds.get(variable);
+        if (limits != null && !limits.isEmpty() && visiting.add(variable)) {
+          Value value = limits.get(0).substitute(scope, bounds, visiting);
+          visiting.remove(variable);
+          return value.withWildcard(wildcard);
+        }
+        return object("java/lang/Object").withWildcard(wildcard);
       }
+      Value value = new Value();
+      value.name = name; value.erasure = erasure; value.wildcard = wildcard;
+      if (owner != null) { value.owner = owner.substitute(scope, bounds, visiting); }
+      if (component != null) { value.component = component.substitute(scope, bounds, visiting); }
+      for (Value argument : arguments) { value.arguments.add(argument.substitute(scope, bounds, visiting)); }
+      return value;
+    }
+
+    private Value withWildcard(char wildcard) {
+      Value value = new Value();
+      value.name = name; value.variable = variable; value.erasure = erasure;
+      value.component = component; value.owner = owner; value.arguments.addAll(arguments);
+      value.wildcard = wildcard;
+      return value;
+    }
+
+    Type erase() {
+      if (erasure != null) { return erasure; }
+      if (name != null) { return Type.getObjectType(name); }
+      if (component != null) { return Type.getType("[" + component.erase().getDescriptor()); }
       return Type.getObjectType("java/lang/Object");
+    }
+
+    private String methodSignature() {
+      // Supporting methods can erase parameterized types, but a declaration's
+      // own type variables must remain variables (e.g. Supplier<T>.get(): T).
+      if (variable != null) { return "T" + variable + ";"; }
+      if (component != null) { return "[" + component.methodSignature(); }
+      return erase().getDescriptor();
+    }
+
+    Value eraseArguments(Set<String> rawNames) {
+      Value value = new Value();
+      value.name = name; value.variable = variable; value.erasure = erasure; value.wildcard = wildcard;
+      if (owner != null) { value.owner = owner.eraseArguments(rawNames); }
+      if (component != null) { value.component = component.eraseArguments(rawNames); }
+      if (!rawNames.contains(name)) {
+        for (Value argument : arguments) { value.arguments.add(argument.eraseArguments(rawNames)); }
+      }
+      return value;
+    }
+
+    void classNames(Set<String> names) {
+      if (name != null) { names.add(name); }
+      if (owner != null) { owner.classNames(names); }
+      if (component != null) { component.classNames(names); }
+      for (Value argument : arguments) { argument.classNames(names); }
+    }
+
+    String source(JniClassPath metadata) throws IOException {
+      if (wildcard == '*') { return "?"; }
+      String prefix = wildcard == '+' ? "? extends " : wildcard == '-' ? "? super " : "";
+      if (variable != null) { return prefix + variable; }
+      if (component != null) { return prefix + component.source(metadata) + "[]"; }
+      if (name == null) { return prefix + erase().getClassName(); }
+      StringBuilder text = new StringBuilder(prefix);
+      text.append(owner == null ? metadata.sourceName(name) : owner.source(metadata) + "." + metadata.resolve(name).simple());
+      if (!arguments.isEmpty()) {
+        text.append('<');
+        for (int i = 0; i < arguments.size(); i++) {
+          if (i != 0) { text.append(", "); }
+          text.append(arguments.get(i).source(metadata));
+        }
+        text.append('>');
+      }
+      return text.toString();
+    }
+
+    @Override
+    public String toString() {
+      return wildcard + ":" + (variable != null ? "T" + variable : name != null ? name : erase().getDescriptor())
+          + ":" + owner + arguments + (component == null ? "" : "[" + component);
     }
   }
 }

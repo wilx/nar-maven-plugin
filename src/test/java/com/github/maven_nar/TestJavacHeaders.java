@@ -78,6 +78,107 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testMultipleEnclosingGenericScopes() throws Exception {
+    compile(classes, expected,
+        "Outer.java", "public class Outer<A> { public class Middle<B> { public class Base<C> { public final void accept(A a, B b, C c) {} } } }",
+        "Strings.java", "public class Strings extends Outer<String>.Middle<Integer>.Base<Long> { public Strings(Outer<String>.Middle<Integer> owner) { owner.super(); } }",
+        "Operation.java", "public interface Operation<A, B, C> { void accept(A a, B b, C c); }",
+        "Text.java", "public interface Text extends Operation<String, Integer, Long> {}",
+        "Wide.java", "public interface Wide { default void accept(String a, Integer b, Long c) {} }",
+        "Api.java", "public class Api extends Strings implements Text, Wide { public Api() { super(new Outer<String>().new Middle<Integer>()); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testMemberTypeParameterShadowsOwnerParameter() throws Exception {
+    compile(classes, expected,
+        "Outer.java", "public class Outer<T> { public class Base<T> { public final void accept(T value) {} } }",
+        "Strings.java", "public class Strings extends Outer<Integer>.Base<String> { public Strings(Outer<Integer> owner) { owner.super(); } }",
+        "Text.java", "public interface Text extends java.util.function.Consumer<String> {}",
+        "Wide.java", "public interface Wide { default void accept(String value) {} }",
+        "Api.java", "public class Api extends Strings implements Text, Wide { public Api() { super(new Outer<Integer>()); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRawEnclosingGenericScope() throws Exception {
+    compile(classes, expected,
+        "Outer.java", "public class Outer<T extends Number> { public class Base { public final void accept(T value) {} } }",
+        "Numbers.java", "public class Numbers extends Outer.Base { public Numbers(Outer owner) { owner.super(); } }",
+        "Numeric.java", "public interface Numeric extends java.util.function.Consumer<Number> {}",
+        "Wide.java", "public interface Wide { default void accept(Number value) {} }",
+        "Api.java", "public class Api extends Numbers implements Numeric, Wide { public Api() { super(new Outer()); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testStaticMemberStopsEnclosingGenericScope() throws Exception {
+    compile(classes, expected,
+        "Outer.java", "public class Outer<T> { public static class Middle<U> { public class Base<V> { public final void accept(U a, V b) {} } } }",
+        "Strings.java", "public class Strings extends Outer.Middle<String>.Base<Integer> { public Strings(Outer.Middle<String> owner) { owner.super(); } }",
+        "Text.java", "public interface Text extends java.util.function.BiConsumer<String, Integer> {}",
+        "Wide.java", "public interface Wide { default void accept(String a, Integer b) {} }",
+        "Api.java", "public class Api extends Strings implements Text, Wide { public Api() { super(new Outer.Middle<String>()); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGenericMemberEnumInterfaceAndCovariance() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base { public Outer.Ordered<?> call() { return null; } }",
+        "Outer.java", "public class Outer<T> { public interface Ordered<T extends Enum<T>> extends Comparable<T> {}"
+        + " public enum Api implements Ordered<Api> { VALUE; public native void call(); }"
+        + " public enum Reference implements java.util.function.Supplier<Outer<String>> { VALUE; public native Outer<String> get(); }"
+        + " public static class Caller extends Base { public native Api call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGenericSupportingInterfaceConflict() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left<T> { default T value(T input) { return null; } }",
+        "Right.java", "public interface Right<T> { T value(T input); }",
+        "Outer.java", "public class Outer { public interface Contract<T extends CharSequence> extends Left<T>, Right<T> { T value(T input); }"
+        + " public enum Api implements Contract<String> { VALUE { public String value(String input) { return null; } }; public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGenericEnumNativeContract() throws Exception {
+    compile(classes, expected,
+        "Sink.java", "public interface Sink<T> { void accept(T value); }",
+        "Api.java", "public enum Api implements Sink<String> { VALUE; public native void accept(String value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRawGenericEnumContract() throws Exception {
+    compile(classes, expected,
+        "Source.java", "public interface Source<T extends Number> { T get(); }",
+        "Api.java", "public enum Api implements Source { VALUE { public Number get() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testErasedSupportingRecordContract() throws Exception {
+    String version = System.getProperty("java.specification.version");
+    if (version.startsWith("1.") || Integer.parseInt(version) < 16) { return; }
+    compile(classes, expected,
+        "Container.java", "public record Container<T>(T value) implements java.util.function.Supplier<T> {"
+        + " public T get() { return value; } public static class Api { public native Container<String> call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testNestedParameterizedSignatureErasure() throws Exception {
+    compile(classes, expected,
+        "Generic.java", "public interface Generic<T> { java.util.List<T>[] convert(java.util.List<? extends T> value); }",
+        "Text.java", "public interface Text extends Generic<String> {}",
+        "Api.java", "public enum Api implements Text { VALUE { public java.util.List<String>[] convert(java.util.List<? extends String> value) { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testEnumSpecializedGenericContract() throws Exception {
     compile(classes, expected,
         "Text.java", "public interface Text extends java.util.function.Supplier<String> {}",
