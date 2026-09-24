@@ -59,6 +59,25 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testGenericEnumInterface() throws Exception {
+    compile(classes, expected,
+        "Ordered.java", "public interface Ordered<T> extends Comparable<T> {}",
+        "Api.java", "public enum Api implements Ordered<Api> { VALUE; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedOuterTypeVariable() throws Exception {
+    compile(classes, expected,
+        "Outer.java", "public class Outer<T> { public class Base { public final void accept(T value) {} } }",
+        "Strings.java", "public class Strings extends Outer<String>.Base { public Strings(Outer<String> outer) { outer.super(); } }",
+        "Text.java", "public interface Text extends java.util.function.Consumer<String> {}",
+        "Wide.java", "public interface Wide { default void accept(String value) {} }",
+        "Api.java", "public class Api extends Strings implements Text, Wide { public Api() { super(new Outer<String>()); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testEnumSpecializedGenericContract() throws Exception {
     compile(classes, expected,
         "Text.java", "public interface Text extends java.util.function.Supplier<String> {}",
