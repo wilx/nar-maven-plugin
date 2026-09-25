@@ -59,6 +59,69 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testOverrideLostInGeneratedSuperclass() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { public Object value(){return null;} }",
+      "p/Contract.java", "package p; public interface Contract { String value(); }",
+      "p/Middle.java", "package p; public class Middle extends Base { public String value(){return null;} public native void middle(); }",
+      "p/Api.java", "package p; public class Api extends Middle implements Contract { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testOverrideLostInGeneratedSuperclassDefault() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { protected String value(){return null;} }",
+      "p/Contract.java", "package p; public interface Contract { default String value(){return null;} }",
+      "p/Middle.java", "package p; public class Middle extends Base { public String value(){return null;} public native void middle(); }",
+      "p/Api.java", "package p; public class Api extends Middle implements Contract { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testSpecializedUncheckedExceptionDoesNotNeedOverride() throws Exception {
+    compile(classes, expected,"p/Missing.java", "package p; public class Missing {}",
+      "p/Base.java", "package p; public class Base<E extends Exception> { public Object value() throws E {return null;} }",
+      "p/Contract.java", "package p; public interface Contract { Object value(); }",
+      "p/Api.java", "package p; public class Api extends Base<RuntimeException> implements Contract { public Missing value(){return null;} public native void call(); }");
+    Files.delete(new File(classes,"p/Missing.class").toPath()); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testSpecializedCheckedExceptionDoesNotNeedOverride() throws Exception {
+    compile(classes, expected,"p/Missing.java", "package p; public class Missing {}",
+      "p/Base.java", "package p; public class Base<E extends Exception> { public Object value() throws E {return null;} }",
+      "p/Contract.java", "package p; public interface Contract { Object value() throws java.io.IOException; }",
+      "p/Api.java", "package p; public class Api extends Base<java.io.IOException> implements Contract { public Missing value(){return null;} public native void call(); }");
+    Files.delete(new File(classes,"p/Missing.class").toPath()); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testPackageShadowByPeerClass() throws Exception {
+    compile(classes, expected,"p/java.java", "package p; public class java {}",
+      "p/Api.java", "package p; public class Api { public native String call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGenericOverrideSignatureWithInheritedExceptions() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base<E extends Exception> { public Object value() throws E {return null;} }",
+      "p/Contract.java", "package p; public interface Contract { String value(); }",
+      "p/Api.java", "package p; public class Api extends Base<RuntimeException> implements Contract { public String value(){return null;} public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testReconstructedSuperclassStillNeedsSubclassOverride() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { public native Object value(); }",
+      "p/Contract.java", "package p; public interface Contract { String value(); }",
+      "p/Api.java", "package p; public class Api extends Base implements Contract { public String value(){return null;} public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testImportedThrowableDoesNotChangeNativeDescriptor() throws Exception {
+    compile(classes, expected,"Throwable.java", "public class Throwable {}",
+      "java.java", "public class java { public native void call(Throwable value); public native void call(int value); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testPackageShadowByPeerInDependencyJar() throws Exception {
+    File dependency = directory("dependency");
+    compile(dependency, null, "p/java.java", "package p; public class java {}");
+    File jar = jar(dependency, null, false);
+    compileWithPath(classes, expected, Arrays.asList(jar),
+        "p/Api.java", "package p; public class Api { public native String call(); }");
+    generate(classes, Arrays.asList(classes, jar), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testPackageShadowByClass() throws Exception {
     compile(classes, expected,"p/java.java", "package p; public class java { public native String call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
     equalHeaders();
