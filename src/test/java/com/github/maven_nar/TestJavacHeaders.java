@@ -59,6 +59,67 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testParameterizedConstructorIntersection() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <U extends Number & Comparable<U>> Base(U value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((Integer) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedConstructorRecursiveBound() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <U extends Comparable<U>> Base(U value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((String) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedConstructorDependentArguments() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <U> Base(java.util.List<U> value, U other) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super(null, null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testNativeGenericSuperclassOverride() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { public T value() { return null; } }",
+        "Api.java", "public class Api extends Base<java.util.List<String>> { public native java.util.List<String> value(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedGenericConstructorBoundOnClass() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T extends Number & Runnable> { protected Base(T value) {} }",
+        "Value.java", "public abstract class Value extends Number implements Runnable {}",
+        "Api.java", "public class Api extends Base<Value> { public Api() { super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testCovariantBoundedWildcardReturn() throws Exception {
+    compile(classes, expected,
+        "TextList.java", "public class TextList<T extends CharSequence> extends java.util.ArrayList<T> {}",
+        "Left.java", "public interface Left { java.util.Collection<? extends CharSequence> value(); }",
+        "Right.java", "public interface Right { TextList<?> value(); }",
+        "Api.java", "public enum Api implements Left, Right { VALUE { public TextList<?> value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testCovariantBoundedWildcardReturnReversed() throws Exception {
+    compile(classes, expected,
+        "TextList.java", "public class TextList<T extends CharSequence> extends java.util.ArrayList<T> {}",
+        "Left.java", "public interface Left { java.util.Collection<? extends CharSequence> value(); }",
+        "Right.java", "public interface Right { TextList<?> value(); }",
+        "Api.java", "public enum Api implements Right, Left { VALUE { public TextList<?> value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testRawParentParameterizedDirectInterface() throws Exception {
     compile(classes, expected,
         "Base.java", "public abstract class Base<T> implements java.util.function.Supplier<T> {}",
