@@ -59,6 +59,73 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testConstructorPrivateTypeArgument() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private static class Hidden {} protected Base(java.util.List<Hidden> values) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorPrivateTypeArgumentNonGenericBase() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base { private static class Hidden {} protected Base(java.util.List<Hidden> values) {} }",
+        "Api.java", "public class Api extends Base { public Api() { super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorPrivateTypeBound() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private interface Hidden {} protected <U extends Number & Hidden> Base(U value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorUnusedPrivateTypeBound() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private interface Hidden {} protected <U extends Hidden> Base() {} }",
+        "Api.java", "public class Api extends Base<String> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorRecursiveComparableWildcard() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <U extends Number & Comparable<? super U>> Base(U value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((Integer) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testWildcardRecursiveComparableProjection() throws Exception {
+    compile(classes, expected,
+        "Values.java", "public class Values<T extends CharSequence & Comparable<? super T>> extends java.util.ArrayList<T> {}",
+        "Left.java", "public interface Left { java.util.Collection<? extends Comparable<?>> value(); }",
+        "Right.java", "public interface Right { Values<?> value(); }",
+        "Api.java", "public enum Api implements Left, Right { VALUE { public Values<?> value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorFormalCapturesSpecializedClass() throws Exception {
+    compile(classes, expected,
+        "U.java", "public class U {}",
+        "Base.java", "public class Base<T> { protected <U extends T> Base(U value) {} }",
+        "Api.java", "public class Api extends Base<U> { public Api() { super((U) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorFormalCapturesPackage() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <java extends T> Base(java value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((String) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testParameterizedConstructorIntersection() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base<T> { protected <U extends Number & Comparable<U>> Base(U value) {} }",
