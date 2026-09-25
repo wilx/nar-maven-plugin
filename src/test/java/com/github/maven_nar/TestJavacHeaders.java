@@ -74,6 +74,17 @@ public class TestJavacHeaders extends TestCase {
     generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
     equalHeaders();
   }
+  public void testWildcardOwnerAndMemberOverloadAmbiguity() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base { public static class Owner<T extends Number> { public class Inner<U extends CharSequence> {} }"
+        + " protected Base(Owner<?>.Inner<?> a, CharSequence b) {}"
+        + " protected <T extends Number, U extends CharSequence> Base(Owner<T>.Inner<U> a, Object b) {} }",
+        "Api.java", "public class Api extends Base { public Api() {"
+        + " super((Base.Owner<Integer>.Inner<String>) null, (Object) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testConstructorWildcardArrayBound() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base { protected <T> Base(java.util.List<? extends T[]> values) {} }",

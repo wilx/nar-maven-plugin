@@ -769,14 +769,28 @@ final class JavacHeaders {
         return parentTypes(view(type));
       }
       public List<List<JniSignature.Value>> parameterBounds(JniSignature.Value type) throws IOException {
-        TypeView resolved = view(type);
+        JniClass model = metadata.resolve(type.name);
+        Map<String, JniSignature.Value> enclosing = enclosingVariables(model);
+        Map<String, JniSignature.Value> scope = new HashMap<String, JniSignature.Value>(enclosing);
+        scope.putAll(signature(model).bind(type.arguments, enclosing));
         List<List<JniSignature.Value>> result = new ArrayList<List<JniSignature.Value>>();
-        for (List<JniSignature.Value> bounds : signature(resolved.model).bounds.values()) {
+        for (List<JniSignature.Value> bounds : signature(model).bounds.values()) {
           List<JniSignature.Value> values = new ArrayList<JniSignature.Value>();
-          for (JniSignature.Value bound : bounds) { values.add(sourceType(bound.substitute(resolved.arguments))); }
+          for (JniSignature.Value bound : bounds) { values.add(sourceType(bound.substitute(scope))); }
           result.add(values);
         }
         return result;
+      }
+      private Map<String, JniSignature.Value> enclosingVariables(JniClass model) throws IOException {
+        Map<String, JniSignature.Value> scope = new HashMap<String, JniSignature.Value>();
+        if (model.innerInstance()) {
+          JniClass owner = metadata.resolve(model.outer());
+          scope.putAll(enclosingVariables(owner));
+          // javac's capture bounds substitute local formals, but retain the
+          // enclosing declaration's variables, distinct from owner captures.
+          scope.putAll(signature(owner).variables(scope, "#owner:" + owner.name + ":"));
+        }
+        return scope;
       }
       public boolean isInterface(String name) throws IOException { return metadata.resolve(name).isInterface(); }
       public boolean isFinal(String name) throws IOException {

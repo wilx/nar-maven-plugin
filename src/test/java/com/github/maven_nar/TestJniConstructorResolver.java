@@ -66,6 +66,69 @@ public class TestJniConstructorResolver extends TestCase {
         "", "(LBase$Owner<*>.Inner;Ljava/lang/CharSequence;)V", "(Base.Owner<?>.Inner) null", "(CharSequence) null");
   }
 
+  public void testCaptureOwnerBounds() throws Exception {
+    check(true, "public static class Owner<T extends Number & Runnable> { public class Inner {} }"
+        + " protected <T extends Number & Runnable> Base(Owner<T>.Inner a) {}", "",
+        "(LBase$Owner<*>.Inner;)V", "(Base.Owner<?>.Inner) null");
+    check(true, "public static class Owner<T> { public class Inner {} }"
+        + " protected <T extends Number> Base(Owner<T>.Inner a) {}", "",
+        "(LBase$Owner<+Ljava/lang/Number;>.Inner;)V", "(Base.Owner<? extends Number>.Inner) null");
+  }
+
+  public void testCaptureOwnerLowerBound() throws Exception {
+    String base = "public static class Owner<T> { public class Inner {} }"
+        + " protected <T> Base(Owner<T>.Inner a, T b) {}";
+    check(true, base, "", "(LBase$Owner<-Ljava/lang/String;>.Inner;Ljava/lang/String;)V",
+        "(Base.Owner<? super String>.Inner) null", "(String) null");
+    check(false, base, "", "(LBase$Owner<-Ljava/lang/String;>.Inner;Ljava/lang/Object;)V",
+        "(Base.Owner<? super String>.Inner) null", "(Object) null");
+  }
+
+  public void testCaptureOwnerAndMemberDependentBounds() throws Exception {
+    check(true, "public static class Owner<T extends Number> { public class Inner<U extends T> {} }"
+        + " protected <U extends Number> Base(Owner<Number>.Inner<U> a) {}", "",
+        "(LBase$Owner<Ljava/lang/Number;>.Inner<*>;)V", "(Base.Owner<Number>.Inner<?>) null");
+    // The member capture retains the declaring owner's variable, which is not
+    // the fresh wildcard capture inferred for T in the constructor invocation.
+    check(false, "public static class Owner<T extends Number> { public class Inner<U extends T> {} }"
+        + " protected <T extends Number, U extends T> Base(Owner<T>.Inner<U> a) {}", "",
+        "(LBase$Owner<*>.Inner<*>;)V", "(Base.Owner<?>.Inner<?>) null");
+  }
+
+  public void testCaptureMultipleOwners() throws Exception {
+    check(true, "public static class Owner<T extends Number> { public class Middle<U extends CharSequence> { public class Inner {} } }"
+        + " protected <T extends Number, U extends CharSequence> Base(Owner<T>.Middle<U>.Inner a) {}", "",
+        "(LBase$Owner<*>.Middle<*>.Inner;)V", "(Base.Owner<?>.Middle<?>.Inner) null");
+    check(false, "public static class Owner<T extends Number> { public class Middle<U extends T> { public class Inner {} } }"
+        + " protected <T extends Number, U extends T> Base(Owner<T>.Middle<U>.Inner a) {}", "",
+        "(LBase$Owner<*>.Middle<*>.Inner;)V", "(Base.Owner<?>.Middle<?>.Inner) null");
+  }
+
+  public void testWildcardOwnerAndMemberOverloadAmbiguity() throws Exception {
+    check(false, "public static class Owner<T extends Number> { public class Inner<U extends CharSequence> {} }"
+        + " protected Base(Owner<?>.Inner<?> a, CharSequence b) {}"
+        + " protected <T extends Number, U extends CharSequence> Base(Owner<T>.Inner<U> a, Object b) {}", "",
+        "(LBase$Owner<*>.Inner<*>;Ljava/lang/CharSequence;)V", "(Base.Owner<?>.Inner<?>) null", "(CharSequence) null");
+  }
+
+  public void testIndependentOwnerCaptures() throws Exception {
+    check(false, "public static class Owner<T> { public class Inner {} }"
+        + " protected <T> Base(Owner<T>.Inner a, Owner<T>.Inner b) {}", "",
+        "(LBase$Owner<*>.Inner;LBase$Owner<*>.Inner;)V", "(Base.Owner<?>.Inner) null", "(Base.Owner<?>.Inner) null");
+  }
+
+  public void testOwnerCaptureDoesNotCaptureNestedTypeArguments() throws Exception {
+    check(false, "public static class Owner<T> { public class Inner {} }"
+        + " protected <T> Base(Owner<java.util.List<T>>.Inner a) {}", "",
+        "(LBase$Owner<Ljava/util/List<*>;>.Inner;)V", "(Base.Owner<java.util.List<?>>.Inner) null");
+  }
+
+  public void testCaptureShadowedMemberFormal() throws Exception {
+    check(true, "public static class Owner<T extends Number> { public class Inner<T extends CharSequence> {} }"
+        + " protected <S extends Number, T extends CharSequence> Base(Owner<S>.Inner<T> a) {}", "",
+        "(LBase$Owner<*>.Inner<*>;)V", "(Base.Owner<?>.Inner<?>) null");
+  }
+
   public void testNullAmbiguityAndArity() throws Exception {
     String base = "private static class A {} private static class B {}"
         + " protected Base(A a) {} protected Base(B b) {} protected Base(A a, int b) {}";
@@ -240,7 +303,12 @@ public class TestJniConstructorResolver extends TestCase {
     try (final JniClassPath metadata = new JniClassPath(Arrays.asList(classes), home, release)) {
       JniConstructorResolver resolver = new JniConstructorResolver(new JniConstructorResolver.Types() {
         private Map<String, Value> arguments(Value type) throws IOException {
-          return JniSignature.read(metadata.resolve(type.name).signature).bind(type.arguments, Collections.<String, Value>emptyMap());
+          JniClass model = metadata.resolve(type.name);
+          Map<String, Value> enclosing = model.innerInstance() && type.owner != null
+              ? arguments(type.owner) : Collections.<String, Value>emptyMap();
+          Map<String, Value> scope = new java.util.HashMap<String, Value>(enclosing);
+          scope.putAll(JniSignature.read(model.signature).bind(type.arguments, enclosing));
+          return scope;
         }
         public List<Value> parents(Value type) throws IOException {
           JniClass model = metadata.resolve(type.name);
@@ -254,13 +322,27 @@ public class TestJniConstructorResolver extends TestCase {
           return result;
         }
         public List<List<Value>> parameterBounds(Value type) throws IOException {
+          JniClass model = metadata.resolve(type.name);
+          JniSignature signature = JniSignature.read(model.signature);
+          Map<String, Value> enclosing = enclosingVariables(model);
+          Map<String, Value> scope = new java.util.HashMap<String, Value>(enclosing);
+          scope.putAll(signature.bind(type.arguments, enclosing));
           List<List<Value>> result = new ArrayList<List<Value>>();
-          for (List<Value> bounds : JniSignature.read(metadata.resolve(type.name).signature).bounds.values()) {
+          for (List<Value> bounds : signature.bounds.values()) {
             List<Value> values = new ArrayList<Value>();
-            for (Value bound : bounds) { values.add(bound.substitute(arguments(type))); }
+            for (Value bound : bounds) { values.add(bound.substitute(scope)); }
             result.add(values);
           }
           return result;
+        }
+        private Map<String, Value> enclosingVariables(JniClass model) throws IOException {
+          Map<String, Value> scope = new java.util.HashMap<String, Value>();
+          if (model.innerInstance()) {
+            JniClass owner = metadata.resolve(model.outer());
+            scope.putAll(enclosingVariables(owner));
+            scope.putAll(JniSignature.read(owner.signature).variables(scope, "#owner:" + owner.name + ":"));
+          }
+          return scope;
         }
         public boolean isInterface(String name) throws IOException { return metadata.resolve(name).isInterface(); }
         public boolean isFinal(String name) throws IOException { return (metadata.resolve(name).access & Opcodes.ACC_FINAL) != 0; }

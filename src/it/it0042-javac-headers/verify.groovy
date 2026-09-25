@@ -20,7 +20,7 @@
 // There are no native source declarations in the consumer; all headers must
 // therefore come from the dependency's compiled classes.
 File headers = new File(basedir, 'consumer/target/nar/javah-include')
-assert headers.list().toList().sort() == ['dependency_Container_Api.h', 'dependency_Constants.h', 'dependency_GenericApi.h', 'dependency_Payload.h'].sort()
+assert headers.list().toList().sort() == ['dependency_Container_Api.h', 'dependency_Constants.h', 'dependency_GenericApi.h', 'dependency_Payload.h', 'dependency_OwnerApi.h'].sort()
 // Base's constructor type parameter java must not shadow qualified names in the generated source.
 String api = new File(headers, 'dependency_Container_Api.h').text
 assert api.contains('Java_dependency_Container_00024Api_call')
@@ -48,12 +48,14 @@ assert !generic.contains('Java_dependency_GenericApi_boundedItems')
 String payload = new File(headers, 'dependency_Payload.h').text
 assert payload.contains('Java_dependency_Payload_call')
 assert !payload.contains('Java_dependency_Payload_compareTo')
+// Owner wildcard capture must expose the generic overload and reject the ambiguous call.
+assert new File(headers, 'dependency_OwnerApi.h').text.contains('Java_dependency_OwnerApi_call')
 String constants = new File(headers, 'dependency_Constants.h').text
 assert constants.contains('1234567890123')
 assert !constants.contains('__nar_header')
 assert new File(basedir, 'consumer/target/nar/javac-headers/javac.args').isFile()
 assert !new File(basedir, 'consumer/src/main/java').exists()
-return true
 
 // Constructor selection must not depend on failed compiler attempts.
 assert !new File(basedir, 'consumer/target/nar/javac-headers/javac.log').text.contains('Compilation attempt 2:')
+return true

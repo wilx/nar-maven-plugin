@@ -257,7 +257,8 @@ noarch area in the target directory.
  bare null arguments, avoiding ambiguous overloads when a usable cast is available.
  Null inference remains available for inaccessible constructor bounds. Constructor
  calls are selected from class metadata before compilation, checking applicability,
- generic bounds and overload specificity. All parameters are supplied, including an
+ generic bounds and overload specificity. Wildcard capture includes parameterized
+ enclosing types, even when the member itself is not generic. All parameters are supplied, including an
  array for a varargs parameter, and the call must be applicable without boxing or
  varargs expansion. Ambiguous calls are rejected during selection; failures identify
  the competing constructor descriptors. All generated units are then compiled

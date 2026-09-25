@@ -54,6 +54,7 @@
               <extraClass>dependency.Constants</extraClass>
               <extraClass>dependency.GenericApi</extraClass>
               <extraClass>dependency.Payload</extraClass>
+              <extraClass>dependency.OwnerApi</extraClass>
             </extraClasses>
           </javah>
         </configuration>

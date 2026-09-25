@@ -103,13 +103,16 @@ final class JniSignature extends SignatureVisitor {
     return variables(java.util.Collections.<String, Value>emptyMap());
   }
 
-  private Map<String, Value> variables(Map<String, Value> scope) {
+  private Map<String, Value> variables(Map<String, Value> scope) { return variables(scope, ""); }
+
+  Map<String, Value> variables(Map<String, Value> scope, String prefix) {
     Map<String, Value> result = new LinkedHashMap<String, Value>();
     for (String name : bounds.keySet()) {
       Value value = new Value();
       value.variable = name;
       value.erasure = value.substitute(scope, bounds,
           new HashSet<String>()).erase();
+      value.variable = prefix + name;
       result.put(name, value);
     }
     Map<String, Value> symbols = new HashMap<String, Value>(scope);

@@ -183,15 +183,18 @@ final class JniConstructorResolver {
     }
 
     Value capture(Value type) throws IOException {
-      if (type == null || type.name == null || type.arguments.isEmpty()) { return type; }
+      if (type == null || type.name == null) { return type; }
       Value captured = type.withWildcard('=');
+      // A non-generic member can still have a parameterized enclosing type.
+      // Capture its qualifier even when there are no local type arguments.
+      captured.owner = capture(type.owner);
       captured.arguments.clear();
       boolean changed = false;
       for (Value argument : type.arguments) {
         if (argument.wildcard == '=') { captured.arguments.add(argument); }
         else { captured.arguments.add(symbol("#capture" + captures++)); changed = true; }
       }
-      if (!changed) { return type; }
+      if (!changed) { return captured.owner == type.owner ? type : captured; }
       List<List<Value>> bounds = types.parameterBounds(captured);
       for (int i = 0; i < type.arguments.size(); i++) {
         Value argument = type.arguments.get(i), value = captured.arguments.get(i);
