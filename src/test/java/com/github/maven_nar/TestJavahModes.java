@@ -60,6 +60,59 @@ public class TestJavahModes extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testEmptySelectionDoesNotRequireCompiler() throws Exception {
+    FileUtils.deleteDirectory(classes);
+    classes.mkdirs();
+    for (String mode : Arrays.asList("auto", "javac", "javah")) {
+      configure(mode, null, noTools()).execute();
+      assertFalse(output.exists());
+    }
+  }
+
+  public void testNonNativeSelectionDoesNotRequireCompiler() throws Exception {
+    FileUtils.deleteDirectory(classes);
+    classes.mkdirs();
+    File source = new File(work, "Plain.java");
+    Files.write(source.toPath(), Arrays.asList("public class Plain {}"), StandardCharsets.UTF_8);
+    assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null,
+        "-proc:none", "-d", classes.getPath(), source.getPath()));
+    configure("auto", null, noTools()).execute();
+    assertFalse(output.exists());
+  }
+
+  public void testExcludedNativeSelectionDoesNotRequireCompiler() throws Exception {
+    Javah generator = configure("javac", null, noTools());
+    TestJavah.set(generator, Javah.class, "excludes", new java.util.HashSet<String>(Arrays.asList("**/*.class")));
+    generator.execute();
+    assertFalse(output.exists());
+  }
+
+  public void testExtraClassesStillRequireCompiler() throws Exception {
+    FileUtils.deleteDirectory(classes);
+    classes.mkdirs();
+    Javah generator = configure("auto", null, noTools());
+    TestJavah.set(generator, Javah.class, "extraClasses", new java.util.HashSet<String>(Arrays.asList("Api")));
+    expectFailure(generator, "Cannot find javac");
+  }
+
+  public void testDependencyOnlyExtraClassesThroughModeSelection() throws Exception {
+    File dependency = new File(work, "dependency");
+    Files.move(classes.toPath(), dependency.toPath());
+    classes.mkdirs();
+    Javah generator = configure("javac", null, toolchain(false));
+    TestJavah.set(generator, Javah.class, "extraClasses", new java.util.HashSet<String>(Arrays.asList("Api")));
+    TestJavah.set(generator, Javah.class, "classPaths", Arrays.asList(classes, dependency));
+    generator.execute();
+    assertTrue(new File(output, "Api.h").isFile());
+  }
+
+  private Toolchain noTools() {
+    return new Toolchain() {
+      public String getType() { return "jdk"; }
+      public String findTool(String tool) { return null; }
+    };
+  }
+
   public void testExplicitJavac() throws Exception {
     Javah generator = configure("javac", null, toolchain(true));
     generator.execute();

@@ -59,6 +59,98 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testPackageShadowByClass() throws Exception {
+    compile(classes, expected,"p/java.java", "package p; public class java { public native String call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPackageShadowBySupportMethodFormal() throws Exception {
+    compile(classes, expected,"p/Left.java", "package p; public interface Left { default <java extends CharSequence> java value(){ return null; } }",
+      "p/Right.java", "package p; public interface Right { <java extends CharSequence> java value(); }",
+      "p/Api.java", "package p; public class Api implements Left, Right { public <java extends CharSequence> java value(){return null;} public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPackageShadowByInterfaceFormal() throws Exception {
+    compile(classes, expected,"p/Container.java", "package p; public interface Container<java extends CharSequence> { class Api { public native void call(); } }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSuperclassCovariantInterfaceOverride() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { public Object value(){return null;} }",
+      "p/Contract.java", "package p; public interface Contract { String value(); }",
+      "p/Api.java", "package p; public class Api extends Base implements Contract { public String value(){return null;} public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSuperclassCovariantDefaultOverride() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { public Object value(){return null;} }",
+      "p/Contract.java", "package p; public interface Contract { default String value(){return null;} }",
+      "p/Api.java", "package p; public class Api extends Base implements Contract { public String value(){return null;} public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSuperclassAccessInterfaceOverride() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { protected String value(){return null;} }",
+      "p/Contract.java", "package p; public interface Contract { String value(); }",
+      "p/Api.java", "package p; public class Api extends Base implements Contract { public String value(){return null;} public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSuperclassThrowsInterfaceOverride() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { public String value() throws Exception {return null;} }",
+      "p/Contract.java", "package p; public interface Contract { String value(); }",
+      "p/Api.java", "package p; public class Api extends Base implements Contract { public String value(){return null;} public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPackageShadowInConstructorTypes() throws Exception {
+    compile(classes, expected,
+        "p/Base.java", "package p; import java.util.List; public class Base { protected Base(List<String> value) {} }",
+        "p/java.java", "package p; import java.util.List; public class java extends Base {"
+        + " public java() { super(null); } public native String call(List<String> value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPackageShadowInConstantOnlyInterface() throws Exception {
+    compile(classes, expected,
+        "p/java.java", "package p; import java.lang.annotation.Native; public interface java { @Native int VALUE = 4; }");
+    generate(classes, Arrays.asList(classes), set("p.java"), Collections.<String>emptySet());
+    equalHeaders();
+    assertTrue(text(new File(actual, "p_java.h")).contains("p_java_VALUE 4L"));
+    assertFalse(text(new File(actual, "p_java.h")).contains("__nar_header"));
+  }
+
+  public void testPackageShadowWithUnrelatedNestedSimpleName() throws Exception {
+    compile(classes, expected,
+        "p/Outer.java", "package p; public class Outer {"
+        + " public static class java { public native String call(); }"
+        + " public static class Other { public static class String { public native void call(); } } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPackageShadowByInheritedMember() throws Exception {
+    compile(classes, expected,
+        "p/Base.java", "package p; public class Base { public static class java {} }",
+        "p/Api.java", "package p; public class Api extends Base { public native String call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testCompatibleSuperclassDoesNotRetainUnneededOverride() throws Exception {
+    compile(classes, expected,
+        "p/Missing.java", "package p; public class Missing {}",
+        "p/Base.java", "package p; public class Base { public Object value() { return null; } }",
+        "p/Contract.java", "package p; public interface Contract { Object value(); }",
+        "p/Api.java", "package p; public class Api extends Base implements Contract {"
+        + " public Missing value() { return null; } public native void call(); }");
+    assertTrue(new File(classes, "p/Missing.class").delete());
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testWildcardOwnerOverloadAmbiguity() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base { public static class Owner<T> { public class Inner {} }"
