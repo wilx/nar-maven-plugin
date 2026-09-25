@@ -35,6 +35,10 @@ final class JniSourceNames {
   private final JniClassPath metadata;
   private final String root;
   private Set<String> shadowed;
+  private boolean collecting = true;
+  private final Set<String> unnamedTypes = new HashSet<String>();
+  private final Set<String> unqualified = new HashSet<String>();
+  private final Set<String> qualifiedPrefixes = new HashSet<String>();
   private final Map<String, String> imports = new HashMap<String, String>();
 
   JniSourceNames(JniClassPath metadata, String root) {
@@ -44,12 +48,30 @@ final class JniSourceNames {
 
   void scope(Set<String> shadowed) { this.shadowed = shadowed; }
 
+  void finishCollecting() { collecting = false; }
+
   Set<String> imports() { return new TreeSet<String>(imports.values()); }
 
   String name(String binary) throws IOException {
     String qualified = metadata.sourceName(binary);
     int dot = qualified.indexOf('.');
-    if (dot < 0 || !shadowed.contains(qualified.substring(0, dot))) { return qualified; }
+    if (collecting) {
+      // A default-package root (including Owner.Member references) has no
+      // alternative qualified spelling. Reserve it across the whole unit before
+      // introducing any imports, even imports used by synthetic constructors.
+      JniClass model = metadata.resolve(binary);
+      while (model.outer() != null) { model = metadata.resolve(model.outer()); }
+      if (model.packageName().isEmpty()) { unqualified.add(model.simple()); unnamedTypes.add(binary); }
+      return qualified;
+    }
+    if (dot < 0) { return qualified; }
+    String first = qualified.substring(0, dot);
+    String packageName = metadata.resolve(root).packageName();
+    if (!shadowed.contains(first) && !imports.containsKey(first)
+        && (unnamedTypes.contains(binary) || !metadata.hasPackageType(packageName, first))) {
+      qualifiedPrefixes.add(first);
+      return qualified;
+    }
     // A type named java (or another package prefix) hides qualified names in
     // its scope. Imports are resolved outside that scope. Prefer importing the
     // outermost type so protected member types remain qualified by their owner.
@@ -65,7 +87,7 @@ final class JniSourceNames {
       String canonical = metadata.sourceName(candidate.name);
       String simple = candidate.simple();
       if (candidate.name.equals(root)) { return simple + qualified.substring(canonical.length()); }
-      if (shadowed.contains(simple)) { continue; }
+      if (shadowed.contains(simple) || unqualified.contains(simple) || qualifiedPrefixes.contains(simple)) { continue; }
       String existing = imports.get(simple);
       if (existing != null && !existing.equals(canonical)) { continue; }
       imports.put(simple, canonical);

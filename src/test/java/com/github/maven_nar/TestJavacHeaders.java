@@ -122,6 +122,76 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testInheritedIntersectionReturn() throws Exception {
+    compile(classes, expected,"p/Left.java", "package p; public interface Left {}",
+      "p/Right.java", "package p; public interface Right {}",
+      "p/Both.java", "package p; public class Both implements Left, Right {}",
+      "p/A.java", "package p; public interface A { Left value(); }",
+      "p/B.java", "package p; public interface B { Right value(); }",
+      "p/Base.java", "package p; public class Base { public Object value(){return null;} }",
+      "p/Middle.java", "package p; public class Middle extends Base { public Both value(){return null;} public native void middle(); }",
+      "p/Api.java", "package p; public class Api extends Middle implements A, B { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testNativeBindingMismatchDoesNotPublishHeaders() throws Exception {
+    compile(classes, expected,
+        "Shadow.java", "public class Shadow {}",
+        "Api.java", "public class Api { public native Shadow call();"
+        + " public static class Shadow { public native void nested(); } }");
+    // Model bytecode whose native descriptor cannot use the apparent source
+    // spelling: Api.Shadow would capture the unnamed-package Shadow reference.
+    File original = new File(classes, "Api.class");
+    org.objectweb.asm.ClassReader reader = new org.objectweb.asm.ClassReader(Files.readAllBytes(original.toPath()));
+    final ClassWriter writer = new ClassWriter(0);
+    reader.accept(new org.objectweb.asm.ClassVisitor(Opcodes.ASM9, writer) {
+      @Override
+      public org.objectweb.asm.MethodVisitor visitMethod(int access, String name, String descriptor,
+          String signature, String[] exceptions) {
+        return super.visitMethod(access, name, name.equals("call") ? "()LShadow;" : descriptor, signature, exceptions);
+      }
+    }, 0);
+    Files.write(original.toPath(), writer.toByteArray());
+    Files.createDirectories(actual.toPath());
+    for (String name : expected.list()) {
+      Files.copy(new File(expected, name).toPath(), new File(actual, name).toPath());
+    }
+    failure("Native method ABI changed", Collections.<String>emptySet());
+    assertTrue("The guard checks successful compilation", new File(work, "generated/classes/Api.class").isFile());
+    equalHeaders(); // Both previously published headers must remain intact.
+  }
+
+  public void testNativeAbiGuardRejectsStaticChange() throws Exception {
+    compile(classes, null, "Api.java", "public class Api { public native void call(); }");
+    JniClass original = new JniClass();
+    new org.objectweb.asm.ClassReader(Files.readAllBytes(new File(classes, "Api.class").toPath())).accept(original, 0);
+    File generated = directory("changed");
+    compile(generated, null, "Api.java", "public class Api { public static native void call(); }");
+    try {
+      JavacHeaders.verifyNativeMethods(original, new File(generated, "Api.class"));
+      fail("A changed jobject/jclass receiver must not be published");
+    } catch (IOException ex) { assertTrue(ex.getMessage(), ex.getMessage().contains("Native method ABI changed")); }
+  }
+
+  public void testUnrelatedUnnamedTypeDoesNotBlockImport() throws Exception {
+    compile(classes, expected,
+        "Throwable.java", "public class Throwable {}",
+        "Base.java", "public class Base { protected Base() throws Exception {} }",
+        "java.java", "import java.lang.Throwable; public class java extends Base {"
+        + " public java() throws Throwable {} public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testThrowingConstructorThroughGeneratedSuperclass() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base { protected Base() throws Exception {} }",
+        "Middle.java", "public class Middle extends Base { public Middle() throws Exception {} public native void middle(); }",
+        "Api.java", "public class Api extends Middle { public Api() throws Exception {} public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testPackageShadowByClass() throws Exception {
     compile(classes, expected,"p/java.java", "package p; public class java { public native String call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
     equalHeaders();

@@ -150,6 +150,7 @@ final class JavacHeaders {
     File staged = new File(work, "headers");
     compileHeaders(sources, compiled, staged);
     for (String name : targets) {
+      verifyNativeMethods(metadata.resolve(name), new File(compiled, name + ".class"));
       if (!new File(staged, header(name)).isFile()) {
         throw new IOException("javac did not generate the requested JNI header " + header(name) + " for " + name);
       }
@@ -160,6 +161,30 @@ final class JavacHeaders {
       Files.copy(new File(staged, header(name)).toPath(), new File(output, header(name)).toPath(),
           StandardCopyOption.REPLACE_EXISTING);
     }
+  }
+
+  /** Check what javac actually bound before any staged header can replace a published one. */
+  static void verifyNativeMethods(JniClass original, File compiled) throws IOException {
+    JniClass generated = new JniClass();
+    try (InputStream in = Files.newInputStream(compiled.toPath())) {
+      new org.objectweb.asm.ClassReader(in).accept(generated, org.objectweb.asm.ClassReader.SKIP_CODE
+          | org.objectweb.asm.ClassReader.SKIP_DEBUG | org.objectweb.asm.ClassReader.SKIP_FRAMES);
+    }
+    Set<String> expected = nativeMethods(original);
+    Set<String> actual = nativeMethods(generated);
+    if (!original.name.equals(generated.name) || !expected.equals(actual)) {
+      throw new IOException("Native method ABI changed while generating " + original.name
+          + ": expected " + expected + ", compiled " + generated.name + " " + actual);
+    }
+  }
+
+  private static Set<String> nativeMethods(JniClass model) {
+    Set<String> methods = new TreeSet<String>();
+    for (JniClass.Method method : model.natives) {
+      methods.add(((method.access & Opcodes.ACC_STATIC) == 0 ? "instance " : "static ")
+          + method.name + method.descriptor);
+    }
+    return methods;
   }
 
   private void compileHeaders(File sources, File compiled, File staged) throws IOException {
@@ -192,6 +217,10 @@ final class JavacHeaders {
         source.append("package ").append(model.packageName().replace('/', '.')).append(";\n");
       }
       File file = new File(sources, model.name + ".java").getCanonicalFile();
+      // Plan unqualified bindings for the entire unit, including nested types,
+      // before choosing imports. This is a source-name pass, not a compiler retry.
+      emit(model, new StringBuilder(), "");
+      names(model).finishCollecting();
       StringBuilder body = new StringBuilder();
       emit(model, body, "");
       for (String imported : names(model).imports()) { source.append("import ").append(imported).append(";\n"); }
@@ -238,7 +267,6 @@ final class JavacHeaders {
         if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
           hierarchy(model.name, new HashSet<String>());
           if (model.parent != null) { reference(emittedSuperclass(declarationView(model))); }
-          sourceNames = names(model);
           constructors.put(model.name, constructor(model));
         }
         if (targets.contains(model.name)) {
@@ -500,22 +528,45 @@ final class JavacHeaders {
       JniClass.Method own = implementations.get(entry.getKey());
       // An abstract declaration may omit an interface implementation, but cannot
       // inherit a superclass member with an incompatible return, access or throws.
-      boolean reconcileSuperclass = own != null && needsSuperclassOverride(model, entry.getKey(), contracts);
+      boolean reconcileSuperclass = needsSuperclassOverride(model, entry.getKey(), contracts);
       if (!reconcileSuperclass && contracts.size() == 1 && hasDefault) { continue; }
       boolean concrete = model.isEnum() || model.isRecord();
       if (!reconcileSuperclass && !concrete && !hasDefault && contracts.size() == 1) { continue; }
       if (targets.contains(model.name) && own != null && (own.access & Opcodes.ACC_NATIVE) != 0) { continue; }
       // Do not override retained superclass implementations, notably Enum's final methods.
-      if (own == null && inheritsImplementation(model, entry.getKey())) { continue; }
+      if (!reconcileSuperclass && own == null && inheritsImplementation(model, entry.getKey())) { continue; }
       JniClass.Method contract = compatibleReturn(contracts);
       if (!reconcileSuperclass && !concrete && !hasDefault && contract != null) { continue; }
       JniClass.Method method = own == null ? contract : own;
+      if (method == null) { method = inheritedContractOverride(model, entry.getKey(), contracts); }
       if (method == null) {
         throw new IOException("No compatible interface return type for " + model.name + "." + entry.getKey());
       }
       result.add(method);
     }
     return result;
+  }
+
+  private JniClass.Method inheritedContractOverride(JniClass model, String key, List<Contract> contracts)
+      throws IOException {
+    // Neither interface's return need implement the other. An omitted ancestor
+    // may have supplied their common subtype; retain it only when necessary.
+    TypeView type = declarationView(model);
+    while (type.model.parent != null) {
+      type = parents(type).get(0);
+      for (JniClass.Method original : type.model.instanceMethods) {
+        if ((original.access & Opcodes.ACC_BRIDGE) != 0) { continue; }
+        if ((original.access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED)) == 0
+            && !type.model.packageName().equals(model.packageName())) { continue; }
+        JniClass.Method method = type.method(original);
+        if (!key.equals(methodKey(method))) { continue; }
+        for (Contract contract : contracts) {
+          if (!compatibleReturn(method, contract.method)) { return null; }
+        }
+        return method;
+      }
+    }
+    return null;
   }
 
   private boolean needsSuperclassOverride(JniClass model, String key, List<Contract> contracts) throws IOException {
@@ -773,27 +824,33 @@ final class JavacHeaders {
 
   private static final class Constructor {
     final JniSignature formals;
-    final String invocation;
-    Constructor(JniSignature formals, String invocation) {
-      this.formals = formals; this.invocation = invocation;
+    final JniSignature.Value owner;
+    final List<JniSignature.Value> arguments;
+    final boolean throwsThrowable;
+    Constructor(JniSignature formals, JniSignature.Value owner, List<JniSignature.Value> arguments,
+        boolean throwsThrowable) {
+      this.formals = formals; this.owner = owner; this.arguments = arguments;
+      this.throwsThrowable = throwsThrowable;
     }
   }
 
   private Constructor constructor(JniClass model) throws IOException {
-    if (model.parent == null) { return new Constructor(JniSignature.read(null), ""); }
+    if (model.parent == null) { return new Constructor(JniSignature.read(null), null,
+        Collections.<JniSignature.Value>emptyList(), false); }
     JniSignature.Value parentType = emittedSuperclass(declarationView(model));
     TypeView parentView = view(parentType);
     JniClass parent = parentView.model;
-    String invocation = "super(";
+    JniSignature.Value owner = null;
     int skip = 0;
     if (parent.innerInstance()) {
       reference(Type.getObjectType(parent.outer()));
-      JniSignature.Value owner = parentType.owner == null ? JniSignature.Value.object(parent.outer()) : parentType.owner;
+      owner = parentType.owner == null ? JniSignature.Value.object(parent.outer()) : parentType.owner;
       reference(owner);
-      invocation = "((" + source(owner) + ") null).super(";
       skip = 1;
     }
-    if (declarations.containsKey(parent.name)) { return new Constructor(JniSignature.read(null), invocation + ");"); }
+    if (declarations.containsKey(parent.name)) {
+      return new Constructor(JniSignature.read(null), owner, Collections.<JniSignature.Value>emptyList(), false);
+    }
     List<JniClass.Method> candidates = new ArrayList<JniClass.Method>(parent.constructors);
     Collections.sort(candidates, new Comparator<JniClass.Method>() {
       public int compare(JniClass.Method left, JniClass.Method right) {
@@ -847,19 +904,13 @@ final class JavacHeaders {
               throw new IOException("inaccessible constructor type " + name);
             }
           }
-          constructorResolver().resolve(values, formals.bounds, constructorOverloads(parentView, model, values.size()));
-          StringBuilder call = new StringBuilder(invocation);
-          for (int i = 0; i < values.size(); i++) {
-            Type arg = arguments[i + skip];
-            JniSignature.Value argument = values.get(i);
-            if (i != 0) { call.append(", "); }
-            if (argument == null) { call.append("null"); }
-            else if (arg.getSort() == Type.OBJECT || arg.getSort() == Type.ARRAY) {
-              argument.classNames(names);
-              call.append('(').append(source(argument)).append(") null");
-            } else { call.append(defaultValue(arg)); }
+          JniConstructorResolver.Candidate selected = constructorResolver().resolve(values, formals.bounds,
+              constructorOverloads(parentView, model, values.size()));
+          boolean throwing = false;
+          for (JniClass.Method overload : parent.constructors) {
+            if (overload.descriptor.equals(selected.descriptor)) { throwing = !overload.exceptions.isEmpty(); break; }
           }
-          Constructor result = new Constructor(formals, call.append(");").toString());
+          Constructor result = new Constructor(formals, owner, values, throwing);
           for (String name : names) { reference(Type.getObjectType(name)); }
           return result;
         } catch (IOException ex) {
@@ -869,6 +920,33 @@ final class JavacHeaders {
     }
     throw new IOException("Cannot construct superclass " + parent.name + " for " + model.name
         + ": no accessible, source-expressible constructor " + rejected);
+  }
+
+  private boolean constructorThrows(JniClass model) {
+    if (declarations.containsKey(model.parent)) { return constructorThrows(declarations.get(model.parent)); }
+    return constructors.get(model.name).throwsThrowable;
+  }
+
+  private void emitConstructor(JniClass model, StringBuilder out, String indent) throws IOException {
+    Constructor constructor = constructors.get(model.name);
+    out.append(indent).append("  protected ");
+    if (!constructor.formals.bounds.isEmpty()) { emitFormals(constructor.formals, out); out.append(' '); }
+    out.append(model.simple()).append("()");
+    // A nonthrowing super call needs no helper type. In the unnamed package,
+    // importing Throwable here can otherwise hide a real native signature type.
+    if (constructorThrows(model)) { out.append(" throws ").append(sourceNames.name("java/lang/Throwable")); }
+    out.append(" { ");
+    if (constructor.owner != null) { out.append("((").append(source(constructor.owner)).append(") null)."); }
+    out.append("super(");
+    for (int i = 0; i < constructor.arguments.size(); i++) {
+      if (i != 0) { out.append(", "); }
+      JniSignature.Value value = constructor.arguments.get(i);
+      if (value == null) { out.append("null"); }
+      else if (value.erase().getSort() == Type.OBJECT || value.erase().getSort() == Type.ARRAY) {
+        out.append('(').append(source(value)).append(") null");
+      } else { out.append(defaultValue(value.erase())); }
+    }
+    out.append("); }\n");
   }
 
   private JniConstructorResolver constructorResolver() {
@@ -1072,11 +1150,7 @@ final class JavacHeaders {
           .append(literal(field)).append(";\n");
     }
     if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
-      Constructor constructor = constructors.get(model.name);
-      out.append(indent).append("  protected ");
-      if (!constructor.formals.bounds.isEmpty()) { emitFormals(constructor.formals, out); out.append(' '); }
-      out.append(model.simple()).append("() throws ").append(sourceNames.name("java/lang/Throwable")).append(" { ")
-          .append(constructor.invocation).append(" }\n");
+      emitConstructor(model, out, indent);
     }
     if (interfaceMethods.containsKey(model.name)) {
       // Keep only declarations needed by retained contracts. These must never

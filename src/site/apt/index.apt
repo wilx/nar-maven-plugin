@@ -282,7 +282,9 @@ noarch area in the target directory.
  supporting methods are emitted: for example, <<<Supplier<String>.get()>>> needs a <<<String>>> return.
  Method type parameters, their bounds and parameterized signature types are retained
  when needed for valid supporting overrides. Compiler-generated bridge adapters do
- not replace source overrides. Native signatures remain erased. Unrelated methods remain omitted. Required contract signature types,
+ not replace source overrides. Inherited methods are checked against the reconstructed
+ superclass declarations, with generic throws clauses specialized alongside return
+ and parameter types. Native signatures remain erased. Unrelated methods remain omitted. Required contract signature types,
  including generic argument types needed by the compiler's inheritance checks, must
  be available on the classpath.
 
@@ -293,7 +295,10 @@ noarch area in the target directory.
  <<<javac.log>>> and are not parsed to select constructors. Temporary outputs are
  cleared before compilation.
  Application class files are not overwritten, and annotation
- processing is disabled. Compilation and verification of every requested header
+ processing is disabled. Source names account for same-package types and reserve
+ unnamed-package references before adding imports. After the single compilation,
+ native method names, descriptors and static/instance flags are compared with the
+ original class files. This check and verification of every requested header
  finish before publication; unsuccessful generation leaves existing headers intact.
 
 * {nar-gnu-make}  

@@ -37,6 +37,7 @@ final class JniSignature extends SignatureVisitor {
   final Map<String, List<Value>> bounds = new LinkedHashMap<String, List<Value>>();
   final List<Value> parents = new ArrayList<Value>();
   final List<Value> parameters = new ArrayList<Value>();
+  final List<Value> exceptions = new ArrayList<Value>();
   Value result;
   private String formal;
 
@@ -66,7 +67,7 @@ final class JniSignature extends SignatureVisitor {
   @Override
   public SignatureVisitor visitReturnType() { result = new Value(); return result; }
   @Override
-  public SignatureVisitor visitExceptionType() { return new SignatureVisitor(Opcodes.ASM9) {}; }
+  public SignatureVisitor visitExceptionType() { return add(exceptions); }
 
   private static Value add(List<Value> values) {
     Value value = new Value();
@@ -158,7 +159,19 @@ final class JniSignature extends SignatureVisitor {
     Value returns = result.substitute(scope);
     source.append(')').append(returns.methodSignature());
     resolved.result = returns;
-    return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString(), resolved, method.exceptions);
+    List<String> thrown = new ArrayList<String>();
+    // javac can omit ordinary throws clauses from Signature; Exceptions then
+    // remains authoritative. When present, generic throws need the same receiver
+    // substitution as parameters and returns, before interface compatibility checks.
+    if (exceptions.isEmpty()) { thrown.addAll(method.exceptions); }
+    for (Value exception : exceptions) {
+      Value value = exception.substitute(scope);
+      resolved.exceptions.add(value);
+      thrown.add(value.erase().getInternalName());
+      source.append('^').append(value.methodSignature());
+    }
+    return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args),
+        source.toString(), resolved, thrown);
   }
 
   JniSignature renameConstructor(Set<String> reserved) {
@@ -182,6 +195,7 @@ final class JniSignature extends SignatureVisitor {
     }
     for (Value parent : parents) { renamed.parents.add(parent.rename(names)); }
     for (Value parameter : parameters) { renamed.parameters.add(parameter.rename(names)); }
+    for (Value exception : exceptions) { renamed.exceptions.add(exception.rename(names)); }
     renamed.result = result == null ? null : result.rename(names);
     return renamed;
   }

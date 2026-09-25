@@ -54,6 +54,7 @@ final class JniClassPath implements Closeable {
   private final List<File> platform = new ArrayList<File>();
   private final Map<String, JniClass> classes = new HashMap<String, JniClass>();
   private final Map<String, String> sourceNames = new HashMap<String, String>();
+  private final Map<String, Boolean> packageTypes = new HashMap<String, Boolean>();
   private final int release;
   private final File javaHome;
   private FileSystem runtimeImage;
@@ -98,6 +99,19 @@ final class JniClassPath implements Closeable {
     if (!name.equals(found.name)) { throw new IOException("Conflicting class definition for " + name + ": " + found.name); }
     classes.put(name, found);
     return found;
+  }
+
+  /** Probe only a possible package/type collision, without traversing its dependencies. */
+  boolean hasPackageType(String packageName, String simple) throws IOException {
+    String name = packageName.isEmpty() ? simple : packageName + "/" + simple;
+    Boolean present = packageTypes.get(name);
+    if (present == null) {
+      JniClass model = classes.get(name);
+      if (model == null) { model = find(entries, name, false); }
+      present = model != null && name.equals(model.name) && model.outer() == null;
+      packageTypes.put(name, present);
+    }
+    return present;
   }
 
   private JniClass findPlatform(String name) throws IOException {
