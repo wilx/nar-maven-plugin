@@ -86,6 +86,95 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testParameterizedSuperclassConstructor() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> implements java.util.function.Supplier<T> {"
+        + " protected Base(T value) {} public final T get() { return null; } }",
+        "Text.java", "public interface Text<T> extends java.util.function.Supplier<T> {}",
+        "Api.java", "public class Api extends Base<String> implements Text<String> {"
+        + " public Api() { super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedInnerSuperclassConstructor() throws Exception {
+    compile(classes, expected,
+        "Owner.java", "public class Owner<T> { public abstract class Base<U> implements java.util.function.Supplier<T> {"
+        + " protected Base(T value, U other) {} } }",
+        "Text.java", "public interface Text<T> extends java.util.function.Supplier<T> {}",
+        "Api.java", "public abstract class Api extends Owner<String>.Base<Integer> implements Text<String> {"
+        + " public Api(Owner<String> owner) { owner.super(null, null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGeneratedGenericSuperclassCompatibility() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public abstract class Base<T> implements java.util.function.Supplier<T> { public native void base(); }",
+        "Text.java", "public interface Text<T> extends java.util.function.Supplier<T> {}",
+        "Api.java", "public abstract class Api extends Base<String> implements Text<String> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testCovariantLowerWildcardReturns() throws Exception {
+    covariantReturns("java.util.List<? super String> value()", "java.util.List<? super CharSequence> value()",
+        "java.util.List<Object> value()");
+  }
+
+  public void testCovariantNestedWildcardReturns() throws Exception {
+    covariantReturns("java.util.List<? extends java.util.List<? extends CharSequence>> value()",
+        "java.util.List<java.util.List<String>> value()", "java.util.List<java.util.List<String>> value()");
+  }
+
+  public void testCovariantGenericSubtypeReturns() throws Exception {
+    covariantReturns("java.util.Collection<? extends CharSequence> value()", "java.util.ArrayList<String> value()",
+        "java.util.ArrayList<String> value()");
+  }
+
+  public void testCovariantProjectedWildcardReturns() throws Exception {
+    covariantReturns("java.util.Collection<? super String> value()", "java.util.List<? super CharSequence> value()",
+        "java.util.List<Object> value()");
+  }
+
+  public void testCovariantParameterizedArrayReturns() throws Exception {
+    covariantReturns("java.util.List<? extends CharSequence>[] value()", "java.util.List<String>[] value()",
+        "java.util.List<String>[] value()");
+  }
+
+  public void testCovariantGenericMethodReturns() throws Exception {
+    covariantReturns("<T extends CharSequence> java.util.List<? extends T> value()",
+        "<U extends CharSequence> java.util.List<U> value()", "<V extends CharSequence> java.util.List<V> value()");
+  }
+
+  public void testCovariantMethodBoundReturns() throws Exception {
+    covariantReturns("<T extends CharSequence> java.util.List<? extends CharSequence> value()",
+        "<U extends CharSequence> java.util.List<U> value()", "<V extends CharSequence> java.util.List<V> value()");
+  }
+
+  public void testCovariantSupportingInterfaceBoundReturns() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left<T extends Number & CharSequence> { java.util.List<? extends CharSequence> value(); }",
+        "Right.java", "public interface Right<T extends Number & CharSequence> { java.util.List<T> value(); }",
+        "Outer.java", "public class Outer { public abstract static class Digits extends Number implements CharSequence {} public interface Contract<T extends Number & CharSequence> extends Left<T>, Right<T> {}"
+        + " public enum Api implements Contract<Digits> { VALUE { public java.util.List<Digits> value() { return null; } };"
+        + " public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  private void covariantReturns(String left, String right, String implementation) throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left { " + left + "; }",
+        "Right.java", "public interface Right { " + right + "; }",
+        "Api.java", "public enum Api implements Left, Right { VALUE { public " + implementation
+        + " { return null; } }; public native void call(); }",
+        "Reverse.java", "public enum Reverse implements Right, Left { VALUE { public " + implementation
+        + " { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testEnumArgumentBoundOnGeneratedClass() throws Exception {
     compile(classes, expected,
         "Bound.java", "public interface Bound<T extends Comparable<T>> {}",

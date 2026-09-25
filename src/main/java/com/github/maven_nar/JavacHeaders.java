@@ -198,7 +198,7 @@ final class JavacHeaders {
         for (JniClass.Field field : model.constants) { metadata.identifier(field.name, model.name); }
         if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
           hierarchy(model.name, new HashSet<String>());
-          if (model.parent != null) { reference(Type.getObjectType(model.parent)); }
+          if (model.parent != null) { reference(emittedSuperclass(declarationView(model))); }
           constructors.put(model.name, constructor(model));
         }
         if (targets.contains(model.name)) {
@@ -338,40 +338,71 @@ final class JavacHeaders {
     return value.eraseArguments(raw);
   }
 
+  private JniSignature.Value emittedSupertype(TypeView type, String name) {
+    if (!type.raw) {
+      for (JniSignature.Value parent : signature(type.model).parents) {
+        if (name.equals(parent.name)) { return sourceType(parent.substitute(type.arguments)); }
+      }
+    }
+    return JniSignature.Value.object(name);
+  }
+
+  private JniSignature.Value emittedSuperclass(TypeView type) {
+    JniSignature.Value parent = emittedSupertype(type, type.model.parent);
+    if (type.model.isEnum()) {
+      parent = JniSignature.Value.object(type.model.parent);
+      parent.arguments.add(JniSignature.Value.object(type.model.name));
+    }
+    return parent;
+  }
+
   private List<JniSignature.Value> emittedInterfaces(TypeView type) throws IOException {
     List<JniSignature.Value> result = new ArrayList<JniSignature.Value>();
+    Set<String> raw = new HashSet<String>();
+    if (type.model.parent != null) {
+      rawInterfaces(view(emittedSuperclass(type)), raw, new HashSet<String>());
+    }
     for (String name : directInterfaces(type.model)) {
-      JniSignature.Value value = JniSignature.Value.object(name);
-      // Every non-raw declaration needs its interface arguments: another
-      // generated type can use this class to satisfy a parameterized bound.
-      if (!type.raw) {
-        for (JniSignature.Value parent : signature(type.model).parents) {
-          if (name.equals(parent.name)) { value = sourceType(parent.substitute(type.arguments)); break; }
-        }
+      JniSignature.Value iface = emittedSupertype(type, name);
+      // A generated generic superclass has lost its formals. Reconcile only
+      // interface paths sharing one of its raw ancestors; unrelated arguments
+      // (such as Comparable<Payload>) must remain intact.
+      for (String ancestor : raw) {
+        if (subtype(name, ancestor)) { iface = JniSignature.Value.object(name); break; }
       }
-      result.add(value);
+      result.add(iface);
     }
     return result;
   }
 
+  private void rawInterfaces(TypeView type, Set<String> raw, Set<String> visited) throws IOException {
+    if (!visited.add(type.key())) { return; }
+    if (type.raw && type.model.isInterface()) { raw.add(type.model.name); }
+    for (TypeView parent : parents(type)) { rawInterfaces(parent, raw, visited); }
+  }
+
   private List<TypeView> parents(TypeView type) throws IOException {
-    JniClass model = type.model;
     List<TypeView> result = new ArrayList<TypeView>();
+    for (JniSignature.Value parent : parentTypes(type)) { result.add(view(parent)); }
+    return result;
+  }
+
+  private List<JniSignature.Value> parentTypes(TypeView type) throws IOException {
+    JniClass model = type.model;
+    List<JniSignature.Value> result = new ArrayList<JniSignature.Value>();
     if (declarations.containsKey(model.name)) {
       // Resolve exactly the types emitted in the source, including Enum<Self>.
       if (model.parent != null) {
-        JniSignature.Value parent = JniSignature.Value.object(model.parent);
-        if (model.isEnum()) { parent.arguments.add(JniSignature.Value.object(model.name)); }
-        result.add(view(parent));
+        result.add(emittedSuperclass(type));
       }
-      for (JniSignature.Value iface : emittedInterfaces(type)) { result.add(view(iface)); }
+      for (JniSignature.Value iface : emittedInterfaces(type)) { result.add(iface); }
     } else if (type.raw || model.signature == null) {
       // The supertypes of a raw type are themselves erased.
-      if (model.parent != null) { result.add(rawView(model.parent)); }
-      for (String iface : model.interfaces) { result.add(rawView(iface)); }
+      if (model.parent != null) { result.add(JniSignature.Value.object(model.parent)); }
+      for (String iface : model.interfaces) { result.add(JniSignature.Value.object(iface)); }
     } else {
       for (JniSignature.Value parent : signature(model).parents) {
-        result.add(view(parent.substitute(type.arguments)));
+        result.add(parent.substitute(type.arguments));
       }
     }
     return result;
@@ -451,13 +482,96 @@ final class JavacHeaders {
     for (Contract candidate : contracts) {
       boolean compatible = true;
       for (Contract other : contracts) {
-        if (!subtype(Type.getReturnType(candidate.method.descriptor), Type.getReturnType(other.method.descriptor))) {
+        if (!compatibleReturn(candidate.method, other.method)) {
           compatible = false; break;
         }
       }
       if (compatible) { return candidate.method; }
     }
     return null;
+  }
+
+  private boolean compatibleReturn(JniClass.Method candidate, JniClass.Method other) throws IOException {
+    Type child = Type.getReturnType(candidate.descriptor);
+    Type parent = Type.getReturnType(other.descriptor);
+    if (!subtype(child, parent)) { return false; }
+    JniSignature left = candidate.source == null ? JniSignature.read(candidate.signature) : candidate.source;
+    JniSignature right = other.source == null ? JniSignature.read(other.signature) : other.source;
+    Map<String, List<JniSignature.Value>> bounds = new HashMap<String, List<JniSignature.Value>>();
+    JniSignature.Value from = returnType(left, child, bounds);
+    JniSignature.Value to = returnType(right, parent, bounds);
+    return sourceSubtype(from, to, bounds, new HashSet<String>());
+  }
+
+  private JniSignature.Value returnType(JniSignature method, Type erased,
+      Map<String, List<JniSignature.Value>> bounds) {
+    if (method.result == null) { return JniSignature.Value.type(erased); }
+    // Adapt method formals by position before comparing <T> List<T> with
+    // <U> List<U>. These internal names never appear in generated Java.
+    Map<String, String> names = new HashMap<String, String>();
+    for (String name : method.bounds.keySet()) { names.put(name, "#" + names.size()); }
+    for (Map.Entry<String, List<JniSignature.Value>> formal : method.bounds.entrySet()) {
+      List<JniSignature.Value> values = new ArrayList<JniSignature.Value>();
+      for (JniSignature.Value bound : formal.getValue()) { values.add(sourceType(bound.rename(names))); }
+      bounds.put(names.get(formal.getKey()), values);
+    }
+    return sourceType(method.result.rename(names));
+  }
+
+  private boolean sourceSubtype(JniSignature.Value child, JniSignature.Value parent,
+      Map<String, List<JniSignature.Value>> bounds, Set<String> visiting) throws IOException {
+    if (child.same(parent)) { return true; }
+    String key = child + " <: " + parent;
+    if (!visiting.add(key)) { return false; }
+    try {
+      if (child.variable != null) {
+        List<JniSignature.Value> limits = bounds.get(child.variable);
+        if (limits == null) { limits = child.limits; }
+        if (limits != null) {
+          for (JniSignature.Value bound : limits) { if (sourceSubtype(sourceType(bound), parent, bounds, visiting)) { return true; } }
+        }
+        return "java/lang/Object".equals(parent.name);
+      }
+      if (parent.variable != null) { return false; }
+      if (child.component != null && parent.component != null) {
+        return sourceSubtype(child.component, parent.component, bounds, visiting);
+      }
+      if (!subtype(child.erase(), parent.erase())) { return false; }
+      if (parent.name == null || "java/lang/Object".equals(parent.name)) { return true; }
+      if (child.name == null) { return parent.arguments.isEmpty(); }
+      if (!child.name.equals(parent.name)) {
+        for (JniSignature.Value ancestor : parentTypes(view(child))) {
+          if (sourceSubtype(ancestor, parent, bounds, visiting)) { return true; }
+        }
+        return false;
+      }
+      if (child.owner != null && parent.owner != null && !sourceSubtype(child.owner, parent.owner, bounds, visiting)) {
+        return false;
+      }
+      // A genuinely raw return may implement a parameterized contract by
+      // unchecked conversion (JLS 8.4.5); parameterized returns are invariant.
+      if (child.arguments.isEmpty() || parent.arguments.isEmpty()) { return true; }
+      if (child.arguments.size() != parent.arguments.size()) { return false; }
+      for (int i = 0; i < child.arguments.size(); i++) {
+        if (!contains(parent.arguments.get(i), child.arguments.get(i), bounds, visiting)) { return false; }
+      }
+      return true;
+    } finally { visiting.remove(key); }
+  }
+
+  private boolean contains(JniSignature.Value target, JniSignature.Value value,
+      Map<String, List<JniSignature.Value>> bounds, Set<String> visiting) throws IOException {
+    // JLS 4.5.1: extends bounds are covariant; super bounds reverse the relation.
+    if (target.same(value) || target.wildcard == '*') { return true; }
+    if (target.wildcard == '+') {
+      if (value.wildcard == '*' || value.wildcard == '-') { return "java/lang/Object".equals(target.name); }
+      return sourceSubtype(value.withWildcard('='), target.withWildcard('='), bounds, visiting);
+    }
+    if (target.wildcard == '-') {
+      return value.wildcard != '+' && value.wildcard != '*'
+          && sourceSubtype(target.withWildcard('='), value.withWildcard('='), bounds, visiting);
+    }
+    return false;
   }
 
   private boolean subtype(Type child, Type parent) throws IOException {
@@ -536,12 +650,16 @@ final class JavacHeaders {
 
   private String constructor(JniClass model) throws IOException {
     if (model.parent == null) { return ""; }
-    JniClass parent = metadata.resolve(model.parent);
+    JniSignature.Value parentType = emittedSuperclass(declarationView(model));
+    TypeView parentView = view(parentType);
+    JniClass parent = parentView.model;
     String invocation = "super(";
     int skip = 0;
     if (parent.innerInstance()) {
       reference(Type.getObjectType(parent.outer()));
-      invocation = "((" + metadata.sourceName(parent.outer()) + ") null).super(";
+      JniSignature.Value owner = parentType.owner == null ? JniSignature.Value.object(parent.outer()) : parentType.owner;
+      reference(owner);
+      invocation = "((" + owner.source(metadata) + ") null).super(";
       skip = 1;
     }
     if (declarations.containsKey(parent.name)) { return invocation + ");"; }
@@ -558,7 +676,15 @@ final class JavacHeaders {
         rejected.add(candidate.descriptor + " (inaccessible)"); continue;
       }
       try {
-        Type[] arguments = Type.getArgumentTypes(candidate.descriptor);
+        Type[] originalArguments = Type.getArgumentTypes(candidate.descriptor);
+        Type[] arguments = Type.getArgumentTypes(parentView.method(candidate).descriptor);
+        // Inner-class signatures omit the synthetic enclosing-instance parameter.
+        if (skip == 1 && arguments.length + 1 == originalArguments.length) {
+          Type[] withOwner = new Type[originalArguments.length];
+          withOwner[0] = originalArguments[0];
+          System.arraycopy(arguments, 0, withOwner, 1, arguments.length);
+          arguments = withOwner;
+        }
         if (skip == 1 && (arguments.length == 0 || !Type.getObjectType(parent.outer()).equals(arguments[0]))) {
           throw new IOException("missing enclosing-instance parameter");
         }
@@ -638,7 +764,7 @@ final class JavacHeaders {
     if (model.isRecord()) { out.append("()"); }
     if (!model.isInterface() && !model.isEnum() && !model.isRecord()
         && model.parent != null && !"java/lang/Object".equals(model.parent)) {
-      out.append(" extends ").append(metadata.sourceName(model.parent));
+      out.append(" extends ").append(emittedSuperclass(declarationView(model)).source(metadata));
     }
     List<JniSignature.Value> interfaces = emittedInterfaces(declarationView(model));
     for (int i = 0; i < interfaces.size(); i++) {

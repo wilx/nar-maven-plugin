@@ -26,6 +26,8 @@ assert api.contains('Java_dependency_Container_00024Api_call')
 assert api.contains('jthrowable, jintArray')
 // Covariant return checking needs the dependency API's nested Marker interface.
 assert api.contains('Java_dependency_Container_00024Api_self')
+// Base<String> and Text must agree on Supplier<String>; inherited get() stays non-native.
+assert !api.contains('Java_dependency_Container_00024Api_get')
 // The enum's get() implementation lives in its constant-specific class body.
 // Generating its header requires reconstructing the inherited Supplier<String> contract.
 String generic = new File(headers, 'dependency_GenericApi.h').text
@@ -36,6 +38,8 @@ assert !generic.contains('Java_dependency_GenericApi_get')
 assert !generic.contains('Java_dependency_GenericApi_compareTo')
 // Contract's generic override resolves the abstract/default conflict without a JNI entry.
 assert !generic.contains('Java_dependency_GenericApi_value')
+// The two items() contracts need the narrower List<String> return without a JNI entry.
+assert !generic.contains('Java_dependency_GenericApi_items')
 // Both classes are generated together; Bound<Payload> requires Comparable<Payload>.
 String payload = new File(headers, 'dependency_Payload.h').text
 assert payload.contains('Java_dependency_Payload_call')

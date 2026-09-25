@@ -94,6 +94,11 @@ final class JniSignature extends SignatureVisitor {
           new HashSet<String>()).erase();
       result.put(name, value);
     }
+    Map<String, Value> symbols = new HashMap<String, Value>(scope);
+    symbols.putAll(result);
+    for (String name : bounds.keySet()) {
+      for (Value bound : bounds.get(name)) { result.get(name).limits.add(bound.substitute(symbols)); }
+    }
     return result;
   }
 
@@ -107,11 +112,18 @@ final class JniSignature extends SignatureVisitor {
     scope.putAll(variables(scope));
     Type[] args = new Type[parameters.size()];
     StringBuilder source = new StringBuilder();
+    JniSignature resolved = new JniSignature();
     if (!bounds.isEmpty()) {
       source.append('<');
       for (Map.Entry<String, List<Value>> formal : bounds.entrySet()) {
         source.append(formal.getKey());
-        for (Value bound : formal.getValue()) { source.append(':').append(bound.substitute(scope).methodSignature()); }
+        List<Value> limits = new ArrayList<Value>();
+        for (Value bound : formal.getValue()) {
+          Value value = bound.substitute(scope);
+          limits.add(value);
+          source.append(':').append(value.methodSignature());
+        }
+        resolved.bounds.put(formal.getKey(), limits);
       }
       source.append('>');
     }
@@ -119,24 +131,46 @@ final class JniSignature extends SignatureVisitor {
     for (int i = 0; i < args.length; i++) {
       Value value = parameters.get(i).substitute(scope);
       args[i] = value.erase();
+      resolved.parameters.add(value);
       source.append(value.methodSignature());
     }
     Value returns = result.substitute(scope);
     source.append(')').append(returns.methodSignature());
-    return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString());
+    resolved.result = returns;
+    return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString(), resolved);
   }
 
   static final class Value extends SignatureVisitor {
     String name;
     Value owner;
-    private String variable;
+    String variable;
     private Type erasure;
-    private Value component;
-    private char wildcard = '=';
+    Value component;
+    char wildcard = '=';
+    // Symbolic bounds survive substitution. Copies share this list so recursive
+    // bounds can refer to symbols before all their bounds have been populated.
+    List<Value> limits = new ArrayList<Value>();
     final List<Value> arguments = new ArrayList<Value>();
 
     Value() { super(Opcodes.ASM9); }
     static Value object(String name) { Value value = new Value(); value.name = name; return value; }
+    static Value type(Type type) {
+      Value value = new Value();
+      new SignatureReader(type.getDescriptor()).acceptType(value);
+      return value;
+    }
+
+    boolean same(Value other) { return methodSignature().equals(other.methodSignature()); }
+
+    Value rename(Map<String, String> names) {
+      Value value = withWildcard(wildcard);
+      if (names.containsKey(variable)) { value.variable = names.get(variable); }
+      if (owner != null) { value.owner = owner.rename(names); }
+      if (component != null) { value.component = component.rename(names); }
+      value.arguments.clear();
+      for (Value argument : arguments) { value.arguments.add(argument.rename(names)); }
+      return value;
+    }
 
     @Override
     public void visitBaseType(char descriptor) { erasure = Type.getType(String.valueOf(descriptor)); }
@@ -168,7 +202,11 @@ final class JniSignature extends SignatureVisitor {
 
     private Value substitute(Map<String, Value> scope, Map<String, List<Value>> bounds, Set<String> visiting) {
       if (variable != null) {
-        if (scope.containsKey(variable)) { return scope.get(variable).withWildcard(wildcard); }
+        if (scope.containsKey(variable)) {
+          Value argument = scope.get(variable);
+          // Inheriting Collection<E> from List<? extends T> keeps the wildcard.
+          return argument.withWildcard(wildcard == '=' ? argument.wildcard : wildcard);
+        }
         List<Value> limits = bounds.get(variable);
         if (limits != null && !limits.isEmpty() && visiting.add(variable)) {
           Value value = limits.get(0).substitute(scope, bounds, visiting);
@@ -185,9 +223,9 @@ final class JniSignature extends SignatureVisitor {
       return value;
     }
 
-    private Value withWildcard(char wildcard) {
+    Value withWildcard(char wildcard) {
       Value value = new Value();
-      value.name = name; value.variable = variable; value.erasure = erasure;
+      value.name = name; value.variable = variable; value.erasure = erasure; value.limits = limits;
       value.component = component; value.owner = owner; value.arguments.addAll(arguments);
       value.wildcard = wildcard;
       return value;
@@ -222,7 +260,7 @@ final class JniSignature extends SignatureVisitor {
 
     Value eraseArguments(Set<String> rawNames) {
       Value value = new Value();
-      value.name = name; value.variable = variable; value.erasure = erasure; value.wildcard = wildcard;
+      value.name = name; value.variable = variable; value.erasure = erasure; value.wildcard = wildcard; value.limits = limits;
       if (owner != null) { value.owner = owner.eraseArguments(rawNames); }
       if (component != null) { value.component = component.eraseArguments(rawNames); }
       if (!rawNames.contains(name)) {

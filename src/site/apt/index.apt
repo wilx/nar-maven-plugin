@@ -254,10 +254,14 @@ noarch area in the target directory.
  without reconstructing record components. Overrides needed to resolve conflicting
  interface methods are retained. Records and enums receive throwaway method bodies
  where needed to satisfy interface contracts, choosing covariant return types
- independently of interface order. Redundant interface clauses are omitted so that
+ independently of interface order. Return comparison includes generic arguments,
+ wildcard bounds and parameterized supertypes. Redundant interface clauses are omitted so that
  inherited generic instantiations, such as <<<Comparable<E\>>>> on an enum, remain
  authoritative. Interface arguments on non-raw declarations and supporting interface
  type parameters are retained, including bounds involving other generated classes.
+ Superclass arguments are retained consistently with interface arguments, constructor
+ calls and inherited-method lookup. When a supporting generic superclass is erased,
+ interface paths sharing its raw ancestors are reconciled with that erasure.
  Enclosing type arguments are kept separate from member type parameters
  when matching inherited methods. Retained generic contracts are specialized before
  supporting methods are emitted: for example, <<<Supplier<String>.get()>>> needs a <<<String>>> return.

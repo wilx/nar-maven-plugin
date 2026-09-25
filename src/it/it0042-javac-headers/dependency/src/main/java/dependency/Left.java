@@ -20,5 +20,6 @@
 package dependency;
 
 public interface Left<T> {
+  java.util.List<? extends CharSequence> items();
   default <U extends T> U value(U input) { return null; }
 }

@@ -115,9 +115,15 @@ final class JniClass extends ClassVisitor {
     final String name;
     final String descriptor;
     final String signature;
+    // Specialized source types retain bounds from enclosing generic declarations.
+    final JniSignature source;
     Method(int access, String name, String descriptor) { this(access, name, descriptor, null); }
     Method(int access, String name, String descriptor, String signature) {
+      this(access, name, descriptor, signature, null);
+    }
+    Method(int access, String name, String descriptor, String signature, JniSignature source) {
       this.access = access; this.name = name; this.descriptor = descriptor; this.signature = signature;
+      this.source = source;
     }
   }
 

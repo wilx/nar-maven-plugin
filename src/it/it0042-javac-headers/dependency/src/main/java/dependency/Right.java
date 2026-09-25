@@ -20,5 +20,6 @@
 package dependency;
 
 public interface Right<T> {
+  java.util.List<String> items();
   <U extends T> U value(U input);
 }

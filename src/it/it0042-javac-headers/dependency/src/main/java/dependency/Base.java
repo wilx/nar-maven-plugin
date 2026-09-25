@@ -19,6 +19,8 @@
  */
 package dependency;
 
-public class Base {
+public class Base<T> implements java.util.function.Supplier<T> {
+  protected Base(T value) {}
+  public T get() { return null; }
   public Container.Marker self() { return null; }
 }

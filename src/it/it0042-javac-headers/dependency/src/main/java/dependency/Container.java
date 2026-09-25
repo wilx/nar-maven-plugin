@@ -28,7 +28,8 @@ public class Container {
     <U extends T> U value(U input);
   }
 
-  public static class Api extends Base implements Marker {
+  public static class Api extends Base<String> implements Marker, Text {
+    public Api() { super(null); }
     public native Api self();
     public native Throwable call(Throwable problem, int[] values);
   }
