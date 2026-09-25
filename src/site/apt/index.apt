@@ -252,9 +252,10 @@ noarch area in the target directory.
  invocation; failures identify the class and constructor candidates. Throwaway
  constructors retain required type parameters and all their bounds when casting
  arguments to generic superclass constructors, using fresh names to avoid shadowing
- classes or package names. Fully typed constructor calls are preferred; when private
- generic types cannot be named, raw argument casts or null literals allow javac to
- infer a callable signature. Enclosing
+ classes or package names. Fully typed constructor calls are preferred. When private
+ generic types cannot be named, calls using raw casts are tried before calls requiring
+ bare null arguments, avoiding ambiguous overloads when a usable cast is available.
+ Null inference remains available for inaccessible constructor bounds. Enclosing
  interfaces retain interface form. Enclosing records retain their record form
  without reconstructing record components. Overrides needed to resolve conflicting
  interface methods are retained. Records and enums receive throwaway method bodies

@@ -685,9 +685,10 @@ final class JavacHeaders {
       }
     });
     List<String> rejected = new ArrayList<String>();
-    // Prefer a fully typed call to disambiguate overloads. If none is expressible,
-    // let javac infer inaccessible bounds and use raw casts for hidden arguments.
-    for (int attempt = 0; attempt < 2; attempt++) {
+    // Try fully typed calls, then inferred calls with casts for every argument,
+    // and finally calls needing bare nulls. A null can match unrelated overloads,
+    // so it must not hide a later candidate that a raw cast can disambiguate.
+    for (int attempt = 0; attempt < 3; attempt++) {
       boolean inferred = attempt != 0;
       for (JniClass.Method candidate : candidates) {
         if (!accessible(candidate.access, parent, model, true)) {
@@ -717,6 +718,7 @@ final class JavacHeaders {
                 : sourceType(source.parameters.get(i - sourceOffset)));
           }
           if (inferred) { inferConstructorArguments(source, values, model); }
+          if (attempt == 1 && values.contains(null)) { continue; }
           JniSignature formals = source == null ? JniSignature.read(null) : source.constructorFormals(values);
           Set<String> names = new HashSet<String>();
           for (List<JniSignature.Value> bounds : formals.bounds.values()) {

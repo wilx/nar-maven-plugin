@@ -21,5 +21,6 @@ package dependency;
 
 public class PrivateBase<T> {
   private static class Hidden {}
+  protected PrivateBase(Hidden value) {}
   protected PrivateBase(java.util.List<Hidden> values) {}
 }

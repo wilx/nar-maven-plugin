@@ -109,6 +109,43 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testPrivateConstructorNullOverloadReversedDeclarations() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private static class Hidden {}"
+        + " protected Base(java.util.List<Hidden> values) {} protected Base(Hidden value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((java.util.List) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPrivateConstructorNullOverloadInnerSuperclass() throws Exception {
+    compile(classes, expected,
+        "Owner.java", "public class Owner<T> { private static class Hidden {} public class Base<V> {"
+        + " protected Base(Hidden value) {} protected Base(java.util.List<Hidden> values) {} } }",
+        "Api.java", "public class Api extends Owner<String>.Base<Integer> {"
+        + " public Api(Owner<String> owner) { owner.super((java.util.List) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPrivateConstructorBoundOverloadAlternative() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private interface Hidden {}"
+        + " protected <U extends Number & Hidden> Base(U value) {} protected Base(java.util.List<Hidden> values) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((java.util.List) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPrivateConstructorNullOverloadMostSpecific() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private static class Hidden {} private static class Specific extends Hidden {}"
+        + " protected Base(Hidden value) {} protected Base(Specific value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testConstructorPrivateTypeArgument() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base<T> { private static class Hidden {} protected Base(java.util.List<Hidden> values) {} }",

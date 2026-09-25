@@ -44,7 +44,7 @@ assert !generic.contains('Java_dependency_GenericApi_items')
 // TextList<?> carries CharSequence's bound through Collection; its implementation stays non-native.
 assert !generic.contains('Java_dependency_GenericApi_boundedItems')
 // Both classes are generated together; Bound<Payload> requires Comparable<Payload>.
-// Payload also needs a callable superclass constructor without naming its private type argument.
+// Payload must select the List overload without naming its private element type; bare null is ambiguous.
 String payload = new File(headers, 'dependency_Payload.h').text
 assert payload.contains('Java_dependency_Payload_call')
 assert !payload.contains('Java_dependency_Payload_compareTo')
