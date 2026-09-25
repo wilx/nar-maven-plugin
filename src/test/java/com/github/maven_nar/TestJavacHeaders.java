@@ -59,6 +59,33 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testRawParentParameterizedDirectInterface() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public abstract class Base<T> implements java.util.function.Supplier<T> {}",
+        "Text.java", "public interface Text<T> extends java.util.function.Supplier<T> {}",
+        "Api.java", "public abstract class Api extends Base<String> implements Text<String> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedCovariantEnumMethod() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left { java.util.List<? extends CharSequence> value(); }",
+        "Right.java", "public interface Right { java.util.List<String> value(); }",
+        "Api.java", "public enum Api implements Left, Right { VALUE { public java.util.List<String> value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedCovariantEnumMethodReversed() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left { java.util.List<? extends CharSequence> value(); }",
+        "Right.java", "public interface Right { java.util.List<String> value(); }",
+        "Api.java", "public enum Api implements Right, Left { VALUE { public java.util.List<String> value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testEnumArgumentBoundOnGeneratedClass() throws Exception {
     compile(classes, expected,
         "Bound.java", "public interface Bound<T extends Comparable<T>> {}",
