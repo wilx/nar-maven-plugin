@@ -59,6 +59,112 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testInheritedOverrideMustMeetSuperclassAndInterface() throws Exception {
+    compile(classes, expected,"Base.java", "public class Base { public CharSequence value(){return null;} }",
+      "Middle.java", "public class Middle extends Base { public String value(){return null;} public native void middle(); }",
+      "Contract.java", "public interface Contract { java.io.Serializable value(); }",
+      "Api.java", "public class Api extends Middle implements Contract { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testInheritedOverrideMustMeetSuperclassAndDefault() throws Exception {
+    compile(classes, expected,"Base.java", "public class Base { public CharSequence value(){return null;} }",
+      "Middle.java", "public class Middle extends Base { public String value(){return null;} public native void middle(); }",
+      "Contract.java", "public interface Contract { default java.io.Serializable value(){return null;} }",
+      "Api.java", "public class Api extends Middle implements Contract { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testUncheckedConstructorDoesNotNeedThrowable() throws Exception {
+    compile(classes, expected,"Throwable.java", "public class Throwable {}",
+      "Base.java", "public class Base { protected Base() throws RuntimeException {} }",
+      "java.java", "public class java extends Base { public native void call(Throwable t); public native void call(int i); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testCheckedConstructorCanUseNarrowException() throws Exception {
+    compile(classes, expected,"Throwable.java", "public class Throwable {}",
+      "Base.java", "import java.io.IOException; public class Base { protected Base() throws IOException {} }",
+      "java.java", "import java.io.IOException; public class java extends Base { public java() throws IOException {} public native void call(Throwable t); public native void call(int i); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGenericUncheckedConstructorDoesNotNeedThrowable() throws Exception {
+    compile(classes, expected,"Throwable.java", "public class Throwable {}",
+      "Base.java", "public class Base<E extends Exception> { protected Base() throws E {} }",
+      "java.java", "public class java extends Base<RuntimeException> { public native void call(Throwable t); public native void call(int i); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGenericSuperclassExceptionNarrowingControl() throws Exception {
+    compile(classes, expected,"Base.java", "public class Base<E extends Exception> { protected Base() throws E {} }",
+      "Api.java", "public class Api extends Base<RuntimeException> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testMultipleRetainedInterfaceReturnsControl() throws Exception {
+    compile(classes, expected,"Base.java", "public class Base { public CharSequence value(){return null;} }",
+      "Middle.java", "public class Middle extends Base { public String value(){return null;} public native void middle(); }",
+      "Left.java", "public interface Left { CharSequence value(); }",
+      "Right.java", "public interface Right { java.io.Serializable value(); }",
+      "Api.java", "public class Api extends Middle implements Left, Right { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testReviewGenericCheckedConstructor() throws Exception {
+    compile(classes, expected,
+        "Throwable.java", "public class Throwable {}",
+        "Base.java", "public class Base<E extends Exception> { protected Base() throws E {} }",
+        "java.java", "import java.io.IOException; public class java extends Base<IOException> {"
+        + " public java() throws IOException {} public native void call(Throwable t); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testReviewPrivateCheckedConstructor() throws Exception {
+    compile(classes, expected,
+        "Throwable.java", "public class Throwable {}",
+        "Base.java", "import java.io.IOException; public class Base {"
+        + " private static class Hidden extends IOException {} protected Base() throws Hidden {} }",
+        "java.java", "import java.io.IOException; public class java extends Base {"
+        + " public java() throws IOException {} public native void call(Throwable t); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testReviewConstructorExceptionWideningPropagates() throws Exception {
+    compile(classes, expected,
+        "Throwable.java", "public class Throwable {}",
+        "IOException.java", "public class IOException {}",
+        "Base.java", "import java.io.IOException; public class Base { protected Base() throws IOException {} }",
+        "java.java", "public class java extends Base { public java() throws Exception {}"
+        + " public native void call(Throwable t, IOException e); }",
+        "Api.java", "public class Api extends java { public Api() throws Exception {} public native void api(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testReviewConstructorFormalDoesNotHideException() throws Exception {
+    compile(classes, expected,
+        "_NarConstructor0.java", "public class _NarConstructor0 extends Exception {}",
+        "Base.java", "public class Base { protected <T> Base(java.util.List<T> values) throws _NarConstructor0 {} }",
+        "Api.java", "public class Api extends Base { public Api() throws _NarConstructor0 { super(null); }"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testReviewGenericSuperclassReturnContract() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { public T value(){return null;} }",
+        "Middle.java", "public class Middle extends Base<CharSequence> { public String value(){return null;} public native void middle(); }",
+        "Contract.java", "public interface Contract { java.io.Serializable value(); }",
+        "Api.java", "public class Api extends Middle implements Contract { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testOverrideLostInGeneratedSuperclass() throws Exception {
     compile(classes, expected,"p/Base.java", "package p; public class Base { public Object value(){return null;} }",
       "p/Contract.java", "package p; public interface Contract { String value(); }",
