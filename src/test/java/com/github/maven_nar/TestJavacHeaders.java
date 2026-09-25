@@ -59,6 +59,42 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testMixedNullConstructorAlternative() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private static class A {} private static class B {}"
+        + " protected Base(A value) {} protected Base(B value) {} protected Base(A value, int other) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super(null, 0); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testMixedNullConstructorAlternativeNonGeneric() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base { private static class A {} private static class B {}"
+        + " protected Base(A value) {} protected Base(B value) {} protected Base(A value, int other) {} }",
+        "Api.java", "public class Api extends Base { public Api() { super(null, 0); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testMixedNullConstructorOnlyCandidate() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private static class A {} private static class B {}"
+        + " protected Base(A value, int other) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super(null, 0); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testCastConstructorHigherArityAlternative() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private static class A {} private static class B {}"
+        + " protected Base(A value) {} protected Base(B value) {} protected Base(java.util.List<A> values, int other) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((java.util.List) null, 0); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testPrivateConstructorNullOverloadAlternative() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base<T> { private static class Hidden {}"
