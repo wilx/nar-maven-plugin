@@ -120,6 +120,105 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testGenericConstructorIntersectionOverloads() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <U extends Number & Comparable<U>> Base(U value) {}"
+        + " protected Base(String value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((Integer) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGenericInnerConstructorIntersection() throws Exception {
+    compile(classes, expected,
+        "Owner.java", "public class Owner<T> { public class Base<V> {"
+        + " protected <U extends Number & Comparable<U>> Base(U value, T other, V[] array) {} } }",
+        "Api.java", "public class Api extends Owner<String>.Base<Integer> {"
+        + " public Api(Owner<String> owner) { owner.super((Integer) null, null, null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testChainedGenericConstructorBounds() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <U extends Number & Comparable<U>, V extends U>"
+        + " Base(java.util.List<? super U> values, V other, U[] array) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() {"
+        + " super((java.util.List<Number>) null, (Integer) null, (Integer[]) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testUnusedConstructorFormalNeedsNoDeclaration() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private interface Hidden {} protected <U extends Hidden> Base() {} }",
+        "Api.java", "public class Api extends Base<String> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInaccessibleConstructorBoundUsesAlternative() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private interface Hidden {}"
+        + " protected <U extends Number & Hidden> Base(U value) {} protected Base(String value) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super((String) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorBoundNeedsSupportingMember() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <U extends Number & Outer.Marker> Base(U value) {} }",
+        "Value.java", "public abstract class Value extends Number implements Outer.Marker {}",
+        "Outer.java", "public class Outer { public interface Marker {} public static class Api extends Base<String> {"
+        + " public Api() { super((Value) null); } public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testCovariantDeclaredLowerWildcardBound() throws Exception {
+    boundedWildcardReturns("T extends CharSequence", "? super String", "CharSequence");
+  }
+
+  public void testCovariantExplicitWildcardIntersection() throws Exception {
+    boundedWildcardReturns("T extends CharSequence", "? extends java.io.Serializable", "CharSequence");
+  }
+
+  public void testCovariantDeclaredWildcardIntersection() throws Exception {
+    boundedWildcardReturns("T extends CharSequence & java.io.Serializable", "?", "java.io.Serializable");
+  }
+
+  public void testCovariantDependentWildcardBounds() throws Exception {
+    boundedWildcardReturns("A extends CharSequence, B extends A, T extends B", "?, ?, ?", "CharSequence");
+  }
+
+  public void testCovariantRecursiveWildcardBounds() throws Exception {
+    boundedWildcardReturns("T extends CharSequence & Comparable<T>", "?", "Comparable<?>");
+  }
+
+  public void testCovariantWildcardBoundFromOwner() throws Exception {
+    compile(classes, expected,
+        "Owner.java", "public class Owner<A extends CharSequence> { public class Values<T extends A> extends java.util.ArrayList<T> {} }",
+        "Left.java", "public interface Left { java.util.Collection<? extends CharSequence> value(); }",
+        "Right.java", "public interface Right { Owner<String>.Values<?> value(); }",
+        "Api.java", "public enum Api implements Left, Right { VALUE { public Owner<String>.Values<?> value() { return null; } }; public native void call(); }",
+        "Reverse.java", "public enum Reverse implements Right, Left { VALUE { public Owner<String>.Values<?> value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  private void boundedWildcardReturns(String formals, String arguments, String upper) throws Exception {
+    String result = "Bounded<" + arguments + ">";
+    compile(classes, expected,
+        "Bounded.java", "public class Bounded<" + formals + "> extends java.util.ArrayList<T> {}",
+        "Left.java", "public interface Left { java.util.Collection<? extends " + upper + "> value(); }",
+        "Right.java", "public interface Right { " + result + " value(); }",
+        "Api.java", "public enum Api implements Left, Right { VALUE { public " + result + " value() { return null; } }; public native void call(); }",
+        "Reverse.java", "public enum Reverse implements Right, Left { VALUE { public " + result + " value() { return null; } }; public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testRawParentParameterizedDirectInterface() throws Exception {
     compile(classes, expected,
         "Base.java", "public abstract class Base<T> implements java.util.function.Supplier<T> {}",

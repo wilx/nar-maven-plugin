@@ -29,7 +29,7 @@ public class Container {
   }
 
   public static class Api extends Base<String> implements Marker, Text {
-    public Api() { super(null); }
+    public Api() { super(null, (Integer) null); }
     public native Api self();
     public native Throwable call(Throwable problem, int[] values);
   }

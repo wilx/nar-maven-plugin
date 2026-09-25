@@ -19,8 +19,4 @@
  */
 package dependency;
 
-public interface Left<T> {
-  java.util.Collection<? extends CharSequence> boundedItems();
-  java.util.List<? extends CharSequence> items();
-  default <U extends T> U value(U input) { return null; }
-}
+public class TextList<T extends CharSequence> extends java.util.ArrayList<T> {}

@@ -20,6 +20,7 @@
 package dependency;
 
 public interface Right<T> {
+  TextList<?> boundedItems();
   java.util.List<String> items();
   <U extends T> U value(U input);
 }

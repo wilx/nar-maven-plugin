@@ -249,13 +249,16 @@ noarch area in the target directory.
  relationships are reconstructed. Real signature types and superclasses must be
  available on the classpath. Types used only in omitted methods or unrelated fields are not eagerly
  resolved. Superclass constructors must have an accessible, source-expressible
- invocation; failures identify the class and constructor candidates. Enclosing
+ invocation; failures identify the class and constructor candidates. Throwaway
+ constructors retain required type parameters and all their bounds when casting
+ arguments to generic superclass constructors. Enclosing
  interfaces retain interface form. Enclosing records retain their record form
  without reconstructing record components. Overrides needed to resolve conflicting
  interface methods are retained. Records and enums receive throwaway method bodies
  where needed to satisfy interface contracts, choosing covariant return types
  independently of interface order. Return comparison includes generic arguments,
- wildcard bounds and parameterized supertypes. Redundant interface clauses are omitted so that
+ wildcard bounds and parameterized supertypes. Wildcard projection retains bounds
+ declared on the generic type, including dependent and intersection bounds. Redundant interface clauses are omitted so that
  inherited generic instantiations, such as <<<Comparable<E\>>>> on an enum, remain
  authoritative. Interface arguments on non-raw declarations and supporting interface
  type parameters are retained, including bounds involving other generated classes.

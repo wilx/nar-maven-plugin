@@ -56,7 +56,7 @@ final class JavacHeaders {
   private final JniClassPath metadata;
   private final Set<String> targets = new TreeSet<String>();
   private final Map<String, JniClass> declarations = new TreeMap<String, JniClass>();
-  private final Map<String, String> constructors = new HashMap<String, String>();
+  private final Map<String, Constructor> constructors = new HashMap<String, Constructor>();
   private final Map<String, List<JniClass.Method>> interfaceMethods = new HashMap<String, List<JniClass.Method>>();
   private final Map<String, JniSignature> signatures = new HashMap<String, JniSignature>();
   private final Set<String> references = new HashSet<String>();
@@ -321,7 +321,7 @@ final class JavacHeaders {
         throw new IOException("Inconsistent generic type arguments for " + model.name);
       }
       // Member parameters may shadow an enclosing parameter with the same name.
-      scope.putAll(signature.bind(value.arguments));
+      scope.putAll(signature.bind(value.arguments, scope));
     }
     return new TypeView(model, scope, raw);
   }
@@ -520,6 +520,12 @@ final class JavacHeaders {
 
   private boolean sourceSubtype(JniSignature.Value child, JniSignature.Value parent,
       Map<String, List<JniSignature.Value>> bounds, Set<String> visiting) throws IOException {
+    if (child.wildcard != '=') {
+      for (JniSignature.Value upper : child.upperBounds()) {
+        if (sourceSubtype(sourceType(upper), parent, bounds, visiting)) { return true; }
+      }
+      return false;
+    }
     if (child.same(parent)) { return true; }
     String key = child + " <: " + parent;
     if (!visiting.add(key)) { return false; }
@@ -564,8 +570,10 @@ final class JavacHeaders {
     // JLS 4.5.1: extends bounds are covariant; super bounds reverse the relation.
     if (target.same(value) || target.wildcard == '*') { return true; }
     if (target.wildcard == '+') {
-      if (value.wildcard == '*' || value.wildcard == '-') { return "java/lang/Object".equals(target.name); }
-      return sourceSubtype(value.withWildcard('='), target.withWildcard('='), bounds, visiting);
+      for (JniSignature.Value upper : value.upperBounds()) {
+        if (sourceSubtype(sourceType(upper), target.withWildcard('='), bounds, visiting)) { return true; }
+      }
+      return false;
     }
     if (target.wildcard == '-') {
       return value.wildcard != '+' && value.wildcard != '*'
@@ -648,8 +656,14 @@ final class JavacHeaders {
     return type.getSort() == Type.OBJECT ? metadata.sourceName(type.getInternalName()) : type.getClassName();
   }
 
-  private String constructor(JniClass model) throws IOException {
-    if (model.parent == null) { return ""; }
+  private static final class Constructor {
+    final JniSignature formals;
+    final String invocation;
+    Constructor(JniSignature formals, String invocation) { this.formals = formals; this.invocation = invocation; }
+  }
+
+  private Constructor constructor(JniClass model) throws IOException {
+    if (model.parent == null) { return new Constructor(JniSignature.read(null), ""); }
     JniSignature.Value parentType = emittedSuperclass(declarationView(model));
     TypeView parentView = view(parentType);
     JniClass parent = parentView.model;
@@ -662,7 +676,7 @@ final class JavacHeaders {
       invocation = "((" + owner.source(metadata) + ") null).super(";
       skip = 1;
     }
-    if (declarations.containsKey(parent.name)) { return invocation + ");"; }
+    if (declarations.containsKey(parent.name)) { return new Constructor(JniSignature.read(null), invocation + ");"); }
     List<JniClass.Method> candidates = new ArrayList<JniClass.Method>(parent.constructors);
     Collections.sort(candidates, new Comparator<JniClass.Method>() {
       public int compare(JniClass.Method left, JniClass.Method right) {
@@ -677,7 +691,16 @@ final class JavacHeaders {
       }
       try {
         Type[] originalArguments = Type.getArgumentTypes(candidate.descriptor);
-        Type[] arguments = Type.getArgumentTypes(parentView.method(candidate).descriptor);
+        JniClass.Method specialized = parentView.method(candidate);
+        JniSignature source = specialized.source;
+        JniSignature formals = source == null ? JniSignature.read(null) : source.constructorFormals();
+        Set<String> names = new HashSet<String>();
+        for (Map.Entry<String, List<JniSignature.Value>> formal : formals.bounds.entrySet()) {
+          metadata.identifier(formal.getKey(), model.name);
+          for (JniSignature.Value bound : formal.getValue()) { sourceType(bound).classNames(names); }
+        }
+        Type[] arguments = Type.getArgumentTypes(specialized.descriptor);
+        int sourceOffset = source == null ? 0 : originalArguments.length - source.parameters.size();
         // Inner-class signatures omit the synthetic enclosing-instance parameter.
         if (skip == 1 && arguments.length + 1 == originalArguments.length) {
           Type[] withOwner = new Type[originalArguments.length];
@@ -691,21 +714,27 @@ final class JavacHeaders {
         StringBuilder call = new StringBuilder(invocation);
         for (int i = skip; i < arguments.length; i++) {
           Type arg = arguments[i];
-          reference(arg);
-          Type element = arg.getSort() == Type.ARRAY ? arg.getElementType() : arg;
-          if (element.getSort() == Type.OBJECT) {
-            JniClass parameter = metadata.resolve(element.getInternalName());
-            while (true) {
-              if (!accessible(parameter.nesting == null ? parameter.access : parameter.nesting.access,
-                  parameter, model, false)) { throw new IOException("inaccessible parameter type " + parameter.name); }
-              if (parameter.outer() == null) { break; }
-              parameter = metadata.resolve(parameter.outer());
-            }
-          }
+          JniSignature.Value argument = source == null ? JniSignature.Value.type(arg)
+              : sourceType(source.parameters.get(i - sourceOffset));
+          argument.classNames(names);
           if (i > skip) { call.append(", "); }
-          call.append(defaultValue(arg));
+          if (arg.getSort() == Type.OBJECT || arg.getSort() == Type.ARRAY) {
+            call.append('(').append(argument.source(metadata)).append(") null");
+          } else { call.append(defaultValue(arg)); }
         }
-        return call.append(");").toString();
+        // Name constructor type variables in the throwaway declaration so a
+        // null argument can satisfy every bound, including recursive intersections.
+        for (String name : names) {
+          JniClass parameter = metadata.resolve(name);
+          while (true) {
+            if (!accessible(parameter.nesting == null ? parameter.access : parameter.nesting.access,
+                parameter, model, false)) { throw new IOException("inaccessible constructor type " + parameter.name); }
+            if (parameter.outer() == null) { break; }
+            parameter = metadata.resolve(parameter.outer());
+          }
+        }
+        for (String name : names) { reference(Type.getObjectType(name)); }
+        return new Constructor(formals, call.append(");").toString());
       } catch (IOException ex) { rejected.add(candidate.descriptor + " (" + ex.getMessage() + ")"); }
     }
     throw new IOException("Cannot construct superclass " + parent.name + " for " + model.name
@@ -779,8 +808,11 @@ final class JavacHeaders {
           .append(literal(field)).append(";\n");
     }
     if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
-      out.append(indent).append("  protected ").append(model.simple()).append("() throws java.lang.Throwable { ")
-          .append(constructors.get(model.name)).append(" }\n");
+      Constructor constructor = constructors.get(model.name);
+      out.append(indent).append("  protected ");
+      if (!constructor.formals.bounds.isEmpty()) { emitFormals(constructor.formals, out); out.append(' '); }
+      out.append(model.simple()).append("() throws java.lang.Throwable { ")
+          .append(constructor.invocation).append(" }\n");
     }
     if (interfaceMethods.containsKey(model.name)) {
       // Keep only declarations needed by retained contracts. These must never

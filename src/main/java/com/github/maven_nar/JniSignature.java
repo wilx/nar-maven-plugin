@@ -74,10 +74,28 @@ final class JniSignature extends SignatureVisitor {
     return value;
   }
 
-  Map<String, Value> bind(List<Value> arguments) {
+  Map<String, Value> bind(List<Value> arguments, Map<String, Value> enclosing) {
     Map<String, Value> result = new LinkedHashMap<String, Value>();
     int index = 0;
-    for (String variable : bounds.keySet()) { result.put(variable, arguments.get(index++)); }
+    for (String variable : bounds.keySet()) {
+      Value argument = arguments.get(index++);
+      if (argument.wildcard != '=') {
+        Value captured = argument.withWildcard(argument.wildcard);
+        captured.limits = new ArrayList<Value>(argument.limits);
+        argument = captured;
+      }
+      result.put(variable, argument);
+    }
+    Map<String, Value> scope = new HashMap<String, Value>(enclosing);
+    scope.putAll(result);
+    // Wildcard upper bounds include the declaration's bounds, substituted
+    // simultaneously. Keep them while projecting through subsequent supertypes.
+    for (String variable : bounds.keySet()) {
+      Value argument = result.get(variable);
+      if (argument.wildcard != '=') {
+        for (Value bound : bounds.get(variable)) { argument.limits.add(bound.substitute(scope)); }
+      }
+    }
     return result;
   }
 
@@ -138,6 +156,21 @@ final class JniSignature extends SignatureVisitor {
     source.append(')').append(returns.methodSignature());
     resolved.result = returns;
     return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString(), resolved);
+  }
+
+  JniSignature constructorFormals() {
+    JniSignature result = new JniSignature();
+    Set<String> needed = new HashSet<String>();
+    for (Value parameter : parameters) { parameter.variables(needed); }
+    int previous;
+    do {
+      previous = needed.size();
+      for (String name : new HashSet<String>(needed)) {
+        if (bounds.containsKey(name)) { for (Value bound : bounds.get(name)) { bound.variables(needed); } }
+      }
+    } while (needed.size() != previous);
+    for (String name : bounds.keySet()) { if (needed.contains(name)) { result.bounds.put(name, bounds.get(name)); } }
+    return result;
   }
 
   static final class Value extends SignatureVisitor {
@@ -267,6 +300,29 @@ final class JniSignature extends SignatureVisitor {
         for (Value argument : arguments) { value.arguments.add(argument.eraseArguments(rawNames)); }
       }
       return value;
+    }
+
+    List<Value> upperBounds() {
+      List<Value> result = new ArrayList<Value>();
+      upperBounds(result, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<List<Value>, Boolean>()));
+      return result;
+    }
+
+    private void upperBounds(List<Value> result, Set<List<Value>> visited) {
+      if (wildcard == '=') { result.add(this); return; }
+      // Dependent formals can link captures with identical printed wildcards;
+      // follow their bound identities, and stop recursive bounds without erasing them.
+      if (!visited.add(limits)) { return; }
+      if (wildcard == '+') { result.add(withWildcard('=')); }
+      if (limits.isEmpty()) { result.add(object("java/lang/Object")); }
+      for (Value bound : limits) { bound.upperBounds(result, visited); }
+    }
+
+    void variables(Set<String> names) {
+      if (variable != null) { names.add(variable); }
+      if (owner != null) { owner.variables(names); }
+      if (component != null) { component.variables(names); }
+      for (Value argument : arguments) { argument.variables(names); }
     }
 
     void classNames(Set<String> names) {

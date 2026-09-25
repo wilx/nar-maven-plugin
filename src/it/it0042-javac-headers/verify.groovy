@@ -40,6 +40,8 @@ assert !generic.contains('Java_dependency_GenericApi_compareTo')
 assert !generic.contains('Java_dependency_GenericApi_value')
 // The two items() contracts need the narrower List<String> return without a JNI entry.
 assert !generic.contains('Java_dependency_GenericApi_items')
+// TextList<?> carries CharSequence's bound through Collection; its implementation stays non-native.
+assert !generic.contains('Java_dependency_GenericApi_boundedItems')
 // Both classes are generated together; Bound<Payload> requires Comparable<Payload>.
 String payload = new File(headers, 'dependency_Payload.h').text
 assert payload.contains('Java_dependency_Payload_call')
