@@ -48,6 +48,24 @@ public class TestJniConstructorResolver extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testWildcardMostSpecific() throws Exception {
+    check(false, "protected Base(java.util.List<?> a, String b) {} protected <T> Base(java.util.Collection<T> a, Object b) {}", "", "(Ljava/util/List<*>;Ljava/lang/String;)V", "(java.util.List<?>) null", "(String) null");
+  }
+  public void testBoundedWildcardMostSpecific() throws Exception {
+    check(false, "protected Base(java.util.List<? extends Number> a, String b) {} protected <T extends Number> Base(java.util.Collection<T> a, Object b) {}", "", "(Ljava/util/List<+Ljava/lang/Number;>;Ljava/lang/String;)V", "(java.util.List<? extends Number>) null", "(String) null");
+  }
+  public void testGenericMostSpecificWildcardTarget() throws Exception {
+    check(true, "protected <T> Base(java.util.List<T> a, String b) {} protected Base(java.util.Collection<?> a, Object b) {}", "", "(Ljava/util/List<Ljava/lang/String;>;Ljava/lang/String;)V", "(java.util.List<String>) null", "(String) null");
+  }
+  public void testCaptureOwner() throws Exception {
+    check(true, "public static class Owner<T> { public class Inner {} } protected <T> Base(Owner<T>.Inner a) {}", "", "(LBase$Owner<*>.Inner;)V", "(Base.Owner<?>.Inner) null");
+  }
+  public void testWildcardOwnerOverloadAmbiguity() throws Exception {
+    check(false, "public static class Owner<T> { public class Inner {} }"
+        + " protected Base(Owner<?>.Inner a, CharSequence b) {} protected <T> Base(Owner<T>.Inner a, Object b) {}",
+        "", "(LBase$Owner<*>.Inner;Ljava/lang/CharSequence;)V", "(Base.Owner<?>.Inner) null", "(CharSequence) null");
+  }
+
   public void testNullAmbiguityAndArity() throws Exception {
     String base = "private static class A {} private static class B {}"
         + " protected Base(A a) {} protected Base(B b) {} protected Base(A a, int b) {}";

@@ -59,6 +59,21 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testWildcardOwnerOverloadAmbiguity() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base { public static class Owner<T> { public class Inner {} }"
+        + " protected Base(Owner<?>.Inner a, CharSequence b) {} protected <T> Base(Owner<T>.Inner a, Object b) {} }",
+        "Api.java", "public class Api extends Base { public Api() { super((Base.Owner<String>.Inner) null, (Object) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGenericOwnerOnlyCandidate() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base { public static class Owner<T> { public class Inner {} } protected <T> Base(Owner<T>.Inner a) {} }",
+        "Api.java", "public class Api extends Base { public Api() { super((Base.Owner<?>.Inner) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
   public void testConstructorWildcardArrayBound() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base { protected <T> Base(java.util.List<? extends T[]> values) {} }",
