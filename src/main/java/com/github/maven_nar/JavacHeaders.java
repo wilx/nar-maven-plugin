@@ -58,10 +58,10 @@ final class JavacHeaders {
   private final Map<String, JniClass> declarations = new TreeMap<String, JniClass>();
   private final Map<String, Constructor> constructors = new HashMap<String, Constructor>();
   private final Map<String, List<JniClass.Method>> interfaceMethods = new HashMap<String, List<JniClass.Method>>();
-  private final Map<String, List<String>> emittedConstructorExceptions = new HashMap<String, List<String>>();
   private final Map<String, JniSignature> signatures = new HashMap<String, JniSignature>();
   private final Map<String, JniSourceNames> sourceUnits = new HashMap<String, JniSourceNames>();
   private JniSourceNames sourceNames;
+  private boolean planningDeclarations;
   private Map<String, String> sourceVariables = Collections.emptyMap();
   private final Set<String> references = new HashSet<String>();
 
@@ -211,13 +211,6 @@ final class JavacHeaders {
         "-sourcepath", sources.getAbsolutePath(), "-classpath", path(classPath),
         "-d", compiled.getAbsolutePath(), "-h", staged.getAbsolutePath());
     if (!bootClassPath.isEmpty()) { Collections.addAll(args, "-bootclasspath", path(bootClassPath)); }
-    // Reserve unqualified bindings in every unit before planning imports for
-    // constructor exceptions. A generated superclass may need a wider exception
-    // spelling; subclasses must declare that actual emitted type too.
-    for (JniClass model : declarations.values()) {
-      if (model.outer() == null) { emit(model, new StringBuilder(), ""); }
-    }
-    for (JniSourceNames names : sourceUnits.values()) { names.finishCollecting(); }
     for (JniClass model : declarations.values()) {
       if (model.outer() != null) { continue; }
       StringBuilder source = new StringBuilder();
@@ -257,7 +250,6 @@ final class JavacHeaders {
       sourceUnits.clear();
       sourceVariables = Collections.emptyMap();
       constructors.clear();
-      emittedConstructorExceptions.clear();
       interfaceMethods.clear();
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) {
         for (String iface : model.interfaces) { reference(Type.getObjectType(iface)); }
@@ -272,7 +264,6 @@ final class JavacHeaders {
         if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
           hierarchy(model.name, new HashSet<String>());
           if (model.parent != null) { reference(emittedSuperclass(declarationView(model))); }
-          constructors.put(model.name, constructor(model));
         }
         if (targets.contains(model.name)) {
           for (JniClass.Method method : model.natives) {
@@ -307,7 +298,33 @@ final class JavacHeaders {
         }
       }
       declareReferencedMembers();
+      if (declarations.size() != previous) { continue; }
+      // Reserve mandatory declarations before choosing synthetic constructors.
+      // Candidates may need imports or a different checked-exception spelling;
+      // neither may hide a native signature or an inherited method contract.
+      planningDeclarations = true;
+      try {
+        for (JniClass model : declarations.values()) {
+          if (model.outer() == null) { emit(model, new StringBuilder(), ""); }
+        }
+        for (JniSourceNames names : sourceUnits.values()) { names.finishCollecting(); }
+        for (JniClass model : declarations.values()) {
+          if (model.outer() == null) { emit(model, new StringBuilder(), ""); }
+        }
+      } finally { planningDeclarations = false; }
+      for (JniClass model : new ArrayList<JniClass>(declarations.values())) { planConstructor(model); }
+      declareReferencedMembers();
     } while (declarations.size() != previous);
+  }
+
+  private void planConstructor(JniClass model) throws IOException {
+    if (model.isInterface() || model.isEnum() || model.isRecord() || constructors.containsKey(model.name)) { return; }
+    // A source superclass has a synthetic no-argument constructor. Plan its
+    // actual throws clause first, including any widening needed in its unit.
+    if (model.parent != null && declarations.containsKey(model.parent)) {
+      planConstructor(declarations.get(model.parent));
+    }
+    constructors.put(model.name, constructor(model));
   }
 
   private void declareReferencedMembers() throws IOException {
@@ -863,7 +880,8 @@ final class JavacHeaders {
       skip = 1;
     }
     if (declarations.containsKey(parent.name)) {
-      return new Constructor(JniSignature.read(null), owner, Collections.<JniSignature.Value>emptyList(), Collections.<String>emptyList());
+      return checkedConstructor(model, JniSignature.read(null), owner, Collections.<JniSignature.Value>emptyList(),
+          constructors.get(parent.name).exceptions, new HashSet<String>());
     }
     List<JniClass.Method> candidates = new ArrayList<JniClass.Method>(parent.constructors);
     Collections.sort(candidates, new Comparator<JniClass.Method>() {
@@ -921,21 +939,12 @@ final class JavacHeaders {
           JniConstructorResolver.Candidate selected = constructorResolver().resolve(values, formals.bounds,
               constructorOverloads(parentView, model, values.size()));
           List<String> exceptions = new ArrayList<String>();
-          for (JniClass.Method overload : parent.constructors) {
-            if (!overload.descriptor.equals(selected.descriptor)) { continue; }
-            for (String exception : parentView.method(overload).exceptions) {
-              // Receiver substitutions matter here too: Base<RuntimeException>
-              // does not require a throws clause for a constructor declaring E.
-              if (subtype(exception, "java/lang/RuntimeException") || subtype(exception, "java/lang/Error")) { continue; }
-              String visible = constructorException(exception, model, null);
-              if (!exceptions.contains(visible)) { exceptions.add(visible); }
-              names.add(visible);
+          for (String exception : constructorResolver().exceptions(values, formals.bounds, selected)) {
+            if (!subtype(exception, "java/lang/RuntimeException") && !subtype(exception, "java/lang/Error")) {
+              exceptions.add(exception);
             }
-            break;
           }
-          Constructor result = new Constructor(formals, owner, values, exceptions);
-          for (String name : names) { reference(Type.getObjectType(name)); }
-          return result;
+          return checkedConstructor(model, formals, owner, values, exceptions, names);
         } catch (IOException ex) {
           rejected.add(candidate.descriptor + (inferred ? " (inferred: " : " (") + ex.getMessage() + ")");
         }
@@ -964,26 +973,34 @@ final class JavacHeaders {
     throw new IOException("Cannot express constructor exception " + original + " for " + model.name);
   }
 
-  private List<String> constructorThrows(JniClass model) throws IOException {
-    List<String> cached = emittedConstructorExceptions.get(model.name);
-    if (cached != null) { return cached; }
-    boolean collecting = names(model).isCollecting();
-    List<String> inherited = model.parent != null && declarations.containsKey(model.parent)
-        ? constructorThrows(declarations.get(model.parent)) : constructors.get(model.name).exceptions;
-    List<String> result = new ArrayList<String>();
-    JniSourceNames names = names(model); // Restore this lexical scope after visiting a source superclass.
-    for (String exception : inherited) {
-      String visible = constructorException(exception, model, collecting ? null : names);
-      if (!result.contains(visible)) { result.add(visible); }
+  private Constructor checkedConstructor(JniClass model, JniSignature formals, JniSignature.Value owner,
+      List<JniSignature.Value> arguments, List<String> thrown, Set<String> types) throws IOException {
+    JniSourceNames trial = names(model).copy();
+    if (owner != null) { owner.classNames(types); }
+    trial.reserve(types);
+    List<String> exceptions = new ArrayList<String>();
+    for (String exception : thrown) {
+      String visible = constructorException(exception, model, trial);
+      if (!exceptions.contains(visible)) { exceptions.add(visible); }
+      types.add(visible);
     }
-    if (!collecting) { emittedConstructorExceptions.put(model.name, result); }
-    return result;
+    Constructor result = new Constructor(formals, owner, arguments, exceptions);
+    JniSourceNames previousNames = sourceNames;
+    Map<String, String> previousVariables = sourceVariables;
+    try {
+      sourceNames = trial;
+      emitConstructor(model, result, new StringBuilder(), "");
+      for (String type : types) { reference(Type.getObjectType(type)); }
+      sourceUnits.put(root(model).name, trial);
+      return result;
+    } finally {
+      sourceNames = previousNames;
+      sourceVariables = previousVariables;
+    }
   }
 
-  private void emitConstructor(JniClass model, StringBuilder out, String indent) throws IOException {
-    Constructor constructor = constructors.get(model.name);
-    List<String> exceptions = constructorThrows(model);
-    sourceNames = names(model);
+  private void emitConstructor(JniClass model, Constructor constructor, StringBuilder out, String indent) throws IOException {
+    List<String> exceptions = constructor.exceptions;
     // Constructor formals must not capture exception names introduced after
     // overload selection, including a widened exception from a source parent.
     JniSignature used = JniSignature.read(null);
@@ -1072,7 +1089,10 @@ final class JavacHeaders {
           bounds.put(formal.getKey(), values);
         }
       }
-      result.add(new JniConstructorResolver.Candidate(original.descriptor, parameters, bounds));
+      List<JniSignature.Value> exceptions = new ArrayList<JniSignature.Value>();
+      if (source != null && !source.exceptions.isEmpty()) { exceptions.addAll(source.exceptions); }
+      else { for (String exception : method.exceptions) { exceptions.add(JniSignature.Value.object(exception)); } }
+      result.add(new JniConstructorResolver.Candidate(original.descriptor, parameters, bounds, exceptions));
     }
     return result;
   }
@@ -1213,8 +1233,8 @@ final class JavacHeaders {
           .append(type(Type.getType(field.descriptor))).append(' ').append(field.name).append(" = ")
           .append(literal(field)).append(";\n");
     }
-    if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
-      emitConstructor(model, out, indent);
+    if (!planningDeclarations && !model.isInterface() && !model.isEnum() && !model.isRecord()) {
+      emitConstructor(model, constructors.get(model.name), out, indent);
     }
     if (interfaceMethods.containsKey(model.name)) {
       // Keep only declarations needed by retained contracts. These must never

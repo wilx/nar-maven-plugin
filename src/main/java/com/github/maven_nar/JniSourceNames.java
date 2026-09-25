@@ -46,6 +46,30 @@ final class JniSourceNames {
     this.root = root;
   }
 
+  JniSourceNames copy() {
+    JniSourceNames result = new JniSourceNames(metadata, root);
+    result.shadowed = shadowed;
+    result.collecting = collecting;
+    result.unnamedTypes.addAll(unnamedTypes);
+    result.unqualified.addAll(unqualified);
+    result.qualifiedPrefixes.addAll(qualifiedPrefixes);
+    result.imports.putAll(imports);
+    return result;
+  }
+
+  void reserve(Set<String> types) throws IOException {
+    for (String binary : types) {
+      JniClass model = metadata.resolve(binary);
+      while (model.outer() != null) { model = metadata.resolve(model.outer()); }
+      if (model.packageName().isEmpty()) {
+        if (!collecting && imports.containsKey(model.simple())) {
+          throw new IOException("Cannot express default-package type " + binary + " beside import " + imports.get(model.simple()));
+        }
+        unqualified.add(model.simple()); unnamedTypes.add(binary);
+      }
+    }
+  }
+
   void scope(Set<String> shadowed) { this.shadowed = shadowed; }
 
   boolean isCollecting() { return collecting; }
@@ -61,9 +85,7 @@ final class JniSourceNames {
       // A default-package root (including Owner.Member references) has no
       // alternative qualified spelling. Reserve it across the whole unit before
       // introducing any imports, even imports used by synthetic constructors.
-      JniClass model = metadata.resolve(binary);
-      while (model.outer() != null) { model = metadata.resolve(model.outer()); }
-      if (model.packageName().isEmpty()) { unqualified.add(model.simple()); unnamedTypes.add(binary); }
+      reserve(Collections.singleton(binary));
       return qualified;
     }
     if (dot < 0) { return qualified; }

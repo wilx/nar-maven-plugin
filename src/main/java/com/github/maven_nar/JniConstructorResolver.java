@@ -49,8 +49,12 @@ final class JniConstructorResolver {
     final String descriptor;
     final List<Value> parameters;
     final Map<String, List<Value>> bounds;
+    final List<Value> exceptions;
     Candidate(String descriptor, List<Value> parameters, Map<String, List<Value>> bounds) {
-      this.descriptor = descriptor; this.parameters = parameters; this.bounds = bounds;
+      this(descriptor, parameters, bounds, Collections.<Value>emptyList());
+    }
+    Candidate(String descriptor, List<Value> parameters, Map<String, List<Value>> bounds, List<Value> exceptions) {
+      this.descriptor = descriptor; this.parameters = parameters; this.bounds = bounds; this.exceptions = exceptions;
     }
     Candidate rename(String prefix) {
       Map<String, String> names = new HashMap<String, String>();
@@ -63,7 +67,9 @@ final class JniConstructorResolver {
         for (Value value : entry.getValue()) { values.add(value.rename(names)); }
         bounds.put(names.get(entry.getKey()), values);
       }
-      return new Candidate(descriptor, parameters, bounds);
+      List<Value> exceptions = new ArrayList<Value>();
+      for (Value value : this.exceptions) { exceptions.add(value.rename(names)); }
+      return new Candidate(descriptor, parameters, bounds, exceptions);
     }
   }
 
@@ -98,17 +104,38 @@ final class JniConstructorResolver {
     throw new IOException("ambiguous constructor invocation among " + descriptions);
   }
 
+  List<String> exceptions(List<Value> arguments, Map<String, List<Value>> bounds, Candidate target) throws IOException {
+    Candidate left = new Candidate("arguments", arguments, bounds).rename("#source");
+    Candidate right = target.rename("#infer");
+    Inference inference = invocation(left, right, true);
+    if (!inference.solve()) { throw new IOException("constructor exception inference is not applicable"); }
+    Set<String> thrown = new HashSet<String>();
+    for (Value value : right.exceptions) { if (value.variable != null) { thrown.add(value.variable); } }
+    List<String> result = new ArrayList<String>();
+    for (Value value : right.exceptions) {
+      Value resolved = inference.exceptionBound(value, thrown, new HashSet<String>());
+      String name = inference.classBound(resolved, new HashSet<String>());
+      if (name == null) { throw new IOException("Cannot infer constructor exception " + value); }
+      if (!result.contains(name)) { result.add(name); }
+    }
+    return result;
+  }
+
   private boolean matches(Candidate arguments, Candidate target, boolean invocation) throws IOException {
     if (arguments.parameters.size() != target.parameters.size()) { return false; }
     Candidate left = arguments.rename("#source");
     Candidate right = target.rename("#infer");
+    return invocation(left, right, invocation).solve();
+  }
+
+  private Inference invocation(Candidate left, Candidate right, boolean invocation) throws IOException {
     Inference inference = new Inference(left.bounds, right.bounds, invocation);
     for (int i = 0; i < left.parameters.size(); i++) {
       Value argument = left.parameters.get(i);
       if (invocation) { argument = inference.capture(argument); }
       inference.add(invocation ? 'c' : '<', argument, right.parameters.get(i));
     }
-    return inference.solve();
+    return inference;
   }
 
   private static boolean primitive(Value value) {
@@ -180,6 +207,91 @@ final class JniConstructorResolver {
         }
       }
       return valid;
+    }
+
+    /**
+     * Resolve the Throwable class part of the selected invocation's throws types.
+     * Throwable subclasses cannot be generic. Thus a throws clause needs only
+     * the class part of a lower-bound lub or upper-bound glb, not synthesized
+     * generic intersection source. Keep caller/capture variables symbolic until
+     * that projection: their bounds must not trigger the throws-only preference
+     * for RuntimeException (JLS 18.4).
+     */
+    Value exceptionBound(Value value, Set<String> thrown, Set<String> visiting) throws IOException {
+      Bounds bounds = inferred.get(value.variable);
+      if (bounds == null) { return value; }
+      List<Value> lower = new ArrayList<Value>(), upper = new ArrayList<Value>();
+      boolean entered = visiting.add(value.variable);
+      boolean independent = true;
+      for (Value bound : bounds.upper.values()) {
+        if (!inferred.containsKey(bound.variable)) { upper.add(bound); }
+        else {
+          independent = false;
+          if (entered && !visiting.contains(bound.variable)) { upper.add(exceptionBound(bound, thrown, visiting)); }
+        }
+      }
+      if (entered) {
+        for (Value bound : bounds.lower.values()) {
+          if (!inferred.containsKey(bound.variable)) { lower.add(bound); }
+          else if (!visiting.contains(bound.variable)) { lower.add(exceptionBound(bound, thrown, visiting)); }
+        }
+        visiting.remove(value.variable);
+      }
+      if (!lower.isEmpty()) {
+        if (lower.size() == 1) { return lower.get(0); }
+        String common = classBound(lower.get(0), new HashSet<String>());
+        for (int i = 1; common != null && i < lower.size(); i++) {
+          String next = classBound(lower.get(i), new HashSet<String>());
+          while (common != null && next != null && !classSubtype(next, common)) { common = superclass(common); }
+        }
+        if (common == null) { throw new IOException("Cannot resolve constructor exception lower bounds " + lower); }
+        Value result = symbol("#exception-lub:" + value.variable);
+        result.limits.add(Value.object(common));
+        return result;
+      }
+      // JDK 8 retains checked coverage for E extends T even where later javac
+      // versions infer RuntimeException. Preserve that coverage for dependent
+      // formals; the direct throws-only case is consistent across these JDKs.
+      boolean unchecked = entered && independent && thrown.contains(value.variable) && !upper.isEmpty();
+      for (Value bound : upper) {
+        unchecked &= "java/lang/Exception".equals(bound.name) || "java/lang/Throwable".equals(bound.name)
+            || "java/lang/Object".equals(bound.name);
+      }
+      if (unchecked) { return Value.object("java/lang/RuntimeException"); }
+      // A fresh variable also represents an intersection or recursive group for
+      // exception coverage. Do not discard interface bounds when another formal
+      // depends on this one: Exception & Runnable cannot infer RuntimeException.
+      Value result = symbol("#exception:" + value.variable);
+      result.limits.addAll(upper);
+      return result;
+    }
+
+    String classBound(Value value, Set<String> visiting) throws IOException {
+      if (value.name != null) { return types.isInterface(value.name) ? null : value.name; }
+      if (value.variable == null || !visiting.add(value.variable)) { return null; }
+      String result = null;
+      for (Value bound : uppers(value)) {
+        String next = classBound(bound, visiting);
+        if (next != null && (result == null || classSubtype(next, result))) { result = next; }
+      }
+      visiting.remove(value.variable);
+      return result;
+    }
+
+    private boolean classSubtype(String child, String parent) throws IOException {
+      for (String current = child; current != null; current = superclass(current)) {
+        if (current.equals(parent)) { return true; }
+      }
+      return false;
+    }
+
+    private String superclass(String name) throws IOException {
+      // Superclasses precede interfaces. Stop there rather than resolving
+      // unrelated marker interfaces implemented by an exception class.
+      for (Value parent : types.parents(Value.object(name))) {
+        if (!types.isInterface(parent.name)) { return parent.name; }
+      }
+      return null;
     }
 
     Value capture(Value type) throws IOException {

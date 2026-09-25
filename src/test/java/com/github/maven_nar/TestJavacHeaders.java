@@ -1962,6 +1962,28 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testAlternativeConstructorBesideMandatoryImport() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+        "q/Arg.java", "package q; public class Arg {}",
+        "Base.java", "public class Base { protected Base(Arg value) {} protected Base(String value) {} }",
+        "q.java", "import q.Arg; public class q extends Base { public q(){super((String)null);} public native Arg call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRejectedConstructorDoesNotKeepImports() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}",
+        "Throwable.java", "public class Throwable {}",
+        "one/Problem.java", "package one; public class Problem extends Exception {}",
+        "two/Problem.java", "package two; public class Problem {}",
+        "Base.java", "import java.lang.Exception; public class Base {"
+        + " protected Base() throws one.Problem, Exception {} protected Base(two.Problem value) {} }",
+        "java.java", "public class java extends Base { public static class one {} public static class two {}"
+        + " public java(){super(null);} public native void call(Exception e, Throwable t, one a, two b); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);

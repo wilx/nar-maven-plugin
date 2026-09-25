@@ -273,8 +273,53 @@ public class TestJniConstructorResolver extends TestCase {
         "(Ljava/lang/Object;)V", "null");
   }
 
+  public void testExceptionInferenceWithoutArguments() throws Exception {
+    checkExceptions("java/lang/RuntimeException", "protected <E extends Exception> Base() throws E {}", "", "()V");
+    checkExceptions("java/lang/RuntimeException", "protected <E extends Throwable> Base() throws E {}", "", "()V");
+    checkExceptions("java/io/IOException", "protected <E extends java.io.IOException> Base() throws E {}", "", "()V");
+    checkExceptions("java/lang/Exception", "protected <E extends Exception & Runnable> Base() throws E {}", "", "()V");
+  }
+
+  public void testExceptionInferenceFromArguments() throws Exception {
+    String base = "protected <E extends Exception> Base(E value) throws E {}";
+    checkExceptions("java/lang/RuntimeException", base, "", "(Ljava/lang/RuntimeException;)V", "(RuntimeException) null");
+    checkExceptions("java/io/IOException", base, "", "(Ljava/io/IOException;)V", "(java.io.IOException) null");
+    checkExceptions("java/lang/Exception", base, "<T extends Exception>",
+        "<T:Ljava/lang/Exception;>(TT;)V", "(T) null");
+    checkExceptions("java/lang/RuntimeException", base, "", "(Ljava/lang/Object;)V", "null");
+  }
+
+  public void testExceptionInferenceWithDependentFormals() throws Exception {
+    checkExceptions("java/lang/Exception", "protected <T extends Exception, E extends T> Base() throws E {}", "", "()V");
+    checkExceptions("java/io/IOException", "protected <T extends Exception, E extends T> Base(T value) throws E {}", "",
+        "(Ljava/io/IOException;)V", "(java.io.IOException) null");
+    checkExceptions("java/lang/Exception", "protected <T extends Exception, E extends T> Base(T value) throws E {}",
+        "<X extends Exception>", "<X:Ljava/lang/Exception;>(TX;)V", "(X) null");
+    checkExceptions("java/lang/Exception", "protected <T extends Exception & Runnable, E extends T> Base() throws E {}", "", "()V");
+  }
+
+  public void testExceptionInferenceWithLowerBoundsAndCaptures() throws Exception {
+    checkExceptions("java/lang/Exception", "protected <E extends Exception> Base(E a, E b) throws E {}", "",
+        "(Ljava/io/IOException;Ljava/sql/SQLException;)V", "(java.io.IOException) null", "(java.sql.SQLException) null");
+    checkExceptions("java/io/IOException", "protected <E extends Exception> Base(java.util.List<E> a) throws E {}", "",
+        "(Ljava/util/List<+Ljava/io/IOException;>;)V", "(java.util.List<? extends java.io.IOException>) null");
+    checkExceptions("java/lang/Exception", "public static class Box<T extends Exception> {}"
+        + " protected <E extends Exception> Base(Box<E> a) throws E {}", "",
+        "(LBase$Box<-Ljava/io/IOException;>;)V", "(Base.Box<? super java.io.IOException>) null");
+  }
+
+  private void checkExceptions(String exception, String constructors, String formals, String signature, String... expressions)
+      throws Exception {
+    check(true, Collections.singletonList(exception), constructors, formals, signature, expressions);
+  }
+
   private void check(boolean accepted, String constructors, String formals, String argumentSignature, String... expressions)
       throws Exception {
+    check(accepted, null, constructors, formals, argumentSignature, expressions);
+  }
+
+  private void check(boolean accepted, List<String> exceptions, String constructors, String formals,
+      String argumentSignature, String... expressions) throws Exception {
     File classes = Files.createTempDirectory(work.toPath(), "case").toFile();
     assertTrue("Constructor declarations must compile", compile(classes, "Base", "public class Base {" + constructors + "}"));
     StringBuilder call = new StringBuilder("public class Probe extends Base { ").append(formals)
@@ -353,7 +398,11 @@ public class TestJniConstructorResolver extends TestCase {
         if (method.signature == null) {
           for (Type argument : Type.getArgumentTypes(method.descriptor)) { signature.parameters.add(Value.type(argument)); }
         }
-        candidates.add(new JniConstructorResolver.Candidate(method.descriptor, signature.parameters, signature.bounds));
+        if (signature.exceptions.isEmpty()) {
+          for (String exception : method.exceptions) { signature.exceptions.add(Value.object(exception)); }
+        }
+        candidates.add(new JniConstructorResolver.Candidate(method.descriptor, signature.parameters, signature.bounds,
+            signature.exceptions));
       }
       JniSignature arguments = JniSignature.read(argumentSignature);
       for (int i = 0; i < expressions.length; i++) { if (expressions[i].equals("null")) { arguments.parameters.set(i, null); } }
@@ -361,6 +410,17 @@ public class TestJniConstructorResolver extends TestCase {
         JniConstructorResolver.Candidate result = resolver.resolve(arguments.parameters, arguments.bounds, candidates);
         assertTrue("Resolver accepted a call rejected by javac: " + call, accepted);
         assertEquals("Select the same constructor as javac", selected[0], result.descriptor);
+        if (exceptions != null) {
+          List<String> inferred = resolver.exceptions(arguments.parameters, arguments.bounds, result);
+          assertEquals("Inferred exception coverage", exceptions, inferred);
+          StringBuilder clause = new StringBuilder();
+          for (String exception : inferred) {
+            if (clause.length() != 0) { clause.append(", "); }
+            clause.append(exception.replace('/', '.'));
+          }
+          assertTrue("Inferred throws clause must cover the actual invocation",
+              compile(classes, "Probe", call.toString().replace("throws Throwable", "throws " + clause)));
+        }
       } catch (IOException ex) {
         if (accepted) { throw new AssertionError("Resolver rejected a call accepted by javac: " + call, ex); }
         assertTrue(ex.getMessage(), ex.getMessage().contains("ambiguous constructor")

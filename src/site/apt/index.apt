@@ -250,10 +250,15 @@ noarch area in the target directory.
  available on the classpath. Types used only in omitted methods or unrelated fields are not eagerly
  resolved. Superclass constructors must have an accessible, source-expressible
  invocation; failures identify the class and constructor candidates. Checked
- constructor exceptions are specialized for the selected superclass type; unchecked
- exceptions require no throws clause. Inaccessible or shadowed checked exception
+ constructor exceptions are specialized for the selected superclass type and the
+ emitted invocation's inferred type arguments. Unconstrained throws-only type
+ variables can infer <<<RuntimeException>>>; unchecked exceptions require no throws
+ clause. Dependent bounds retain checked coverage needed by older compilers. Inaccessible or shadowed checked exception
  names use the nearest usable superclass, and generated subclasses follow the
- throws clause actually emitted for their parent. Throwaway constructors retain required type parameters and all their bounds when casting
+ throws clause actually emitted for their parent. Constructor selection checks
+ exception and argument spellings against the compilation unit's required names,
+ trying another candidate when a throws clause cannot be expressed. Rejected
+ candidates do not retain imports. Throwaway constructors retain required type parameters and all their bounds when casting
  arguments to generic superclass constructors, using fresh names to avoid shadowing
  classes or package names. Fully typed constructor calls are preferred. When private
  generic types cannot be named, calls using raw casts are tried before calls requiring
