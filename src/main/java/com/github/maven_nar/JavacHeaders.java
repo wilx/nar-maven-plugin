@@ -685,60 +685,135 @@ final class JavacHeaders {
       }
     });
     List<String> rejected = new ArrayList<String>();
-    for (JniClass.Method candidate : candidates) {
-      if (!accessible(candidate.access, parent, model, true)) {
-        rejected.add(candidate.descriptor + " (inaccessible)"); continue;
-      }
-      try {
-        Type[] originalArguments = Type.getArgumentTypes(candidate.descriptor);
-        JniClass.Method specialized = parentView.method(candidate);
-        JniSignature source = specialized.source;
-        JniSignature formals = source == null ? JniSignature.read(null) : source.constructorFormals();
-        Set<String> names = new HashSet<String>();
-        for (Map.Entry<String, List<JniSignature.Value>> formal : formals.bounds.entrySet()) {
-          metadata.identifier(formal.getKey(), model.name);
-          for (JniSignature.Value bound : formal.getValue()) { sourceType(bound).classNames(names); }
+    // Prefer a fully typed call to disambiguate overloads. If none is expressible,
+    // let javac infer inaccessible bounds and use raw casts for hidden arguments.
+    for (int attempt = 0; attempt < 2; attempt++) {
+      boolean inferred = attempt != 0;
+      for (JniClass.Method candidate : candidates) {
+        if (!accessible(candidate.access, parent, model, true)) {
+          if (!inferred) { rejected.add(candidate.descriptor + " (inaccessible)"); }
+          continue;
         }
-        Type[] arguments = Type.getArgumentTypes(specialized.descriptor);
-        int sourceOffset = source == null ? 0 : originalArguments.length - source.parameters.size();
-        // Inner-class signatures omit the synthetic enclosing-instance parameter.
-        if (skip == 1 && arguments.length + 1 == originalArguments.length) {
-          Type[] withOwner = new Type[originalArguments.length];
-          withOwner[0] = originalArguments[0];
-          System.arraycopy(arguments, 0, withOwner, 1, arguments.length);
-          arguments = withOwner;
-        }
-        if (skip == 1 && (arguments.length == 0 || !Type.getObjectType(parent.outer()).equals(arguments[0]))) {
-          throw new IOException("missing enclosing-instance parameter");
-        }
-        StringBuilder call = new StringBuilder(invocation);
-        for (int i = skip; i < arguments.length; i++) {
-          Type arg = arguments[i];
-          JniSignature.Value argument = source == null ? JniSignature.Value.type(arg)
-              : sourceType(source.parameters.get(i - sourceOffset));
-          argument.classNames(names);
-          if (i > skip) { call.append(", "); }
-          if (arg.getSort() == Type.OBJECT || arg.getSort() == Type.ARRAY) {
-            call.append('(').append(argument.source(metadata)).append(") null");
-          } else { call.append(defaultValue(arg)); }
-        }
-        // Name constructor type variables in the throwaway declaration so a
-        // null argument can satisfy every bound, including recursive intersections.
-        for (String name : names) {
-          JniClass parameter = metadata.resolve(name);
-          while (true) {
-            if (!accessible(parameter.nesting == null ? parameter.access : parameter.nesting.access,
-                parameter, model, false)) { throw new IOException("inaccessible constructor type " + parameter.name); }
-            if (parameter.outer() == null) { break; }
-            parameter = metadata.resolve(parameter.outer());
+        try {
+          Type[] originalArguments = Type.getArgumentTypes(candidate.descriptor);
+          JniClass.Method specialized = parentView.method(candidate);
+          JniSignature source = specialized.source;
+          if (source != null) { source = constructorSignature(source, parentType, model); }
+          Type[] arguments = Type.getArgumentTypes(specialized.descriptor);
+          int sourceOffset = source == null ? 0 : originalArguments.length - source.parameters.size();
+          // Inner-class signatures omit the synthetic enclosing-instance parameter.
+          if (skip == 1 && arguments.length + 1 == originalArguments.length) {
+            Type[] withOwner = new Type[originalArguments.length];
+            withOwner[0] = originalArguments[0];
+            System.arraycopy(arguments, 0, withOwner, 1, arguments.length);
+            arguments = withOwner;
           }
+          if (skip == 1 && (arguments.length == 0 || !Type.getObjectType(parent.outer()).equals(arguments[0]))) {
+            throw new IOException("missing enclosing-instance parameter");
+          }
+          List<JniSignature.Value> values = new ArrayList<JniSignature.Value>();
+          for (int i = skip; i < arguments.length; i++) {
+            values.add(source == null ? JniSignature.Value.type(arguments[i])
+                : sourceType(source.parameters.get(i - sourceOffset)));
+          }
+          if (inferred) { inferConstructorArguments(source, values, model); }
+          JniSignature formals = source == null ? JniSignature.read(null) : source.constructorFormals(values);
+          Set<String> names = new HashSet<String>();
+          for (List<JniSignature.Value> bounds : formals.bounds.values()) {
+            for (JniSignature.Value bound : bounds) { sourceType(bound).classNames(names); }
+          }
+          StringBuilder call = new StringBuilder(invocation);
+          for (int i = 0; i < values.size(); i++) {
+            Type arg = arguments[i + skip];
+            JniSignature.Value argument = values.get(i);
+            if (i != 0) { call.append(", "); }
+            if (argument == null) { call.append("null"); }
+            else if (arg.getSort() == Type.OBJECT || arg.getSort() == Type.ARRAY) {
+              argument.classNames(names);
+              call.append('(').append(argument.source(metadata)).append(") null");
+            } else { call.append(defaultValue(arg)); }
+          }
+          for (String name : names) {
+            if (!constructorTypeAccessible(name, model)) {
+              throw new IOException("inaccessible constructor type " + name);
+            }
+          }
+          for (String name : names) { reference(Type.getObjectType(name)); }
+          return new Constructor(formals, call.append(");").toString());
+        } catch (IOException ex) {
+          rejected.add(candidate.descriptor + (inferred ? " (inferred: " : " (") + ex.getMessage() + ")");
         }
-        for (String name : names) { reference(Type.getObjectType(name)); }
-        return new Constructor(formals, call.append(");").toString());
-      } catch (IOException ex) { rejected.add(candidate.descriptor + " (" + ex.getMessage() + ")"); }
+      }
     }
     throw new IOException("Cannot construct superclass " + parent.name + " for " + model.name
         + ": no accessible, source-expressible constructor " + rejected);
+  }
+
+  private void inferConstructorArguments(JniSignature source, List<JniSignature.Value> arguments, JniClass model)
+      throws IOException {
+    Map<String, List<JniSignature.Value>> bounds = source == null ? JniSignature.read(null).bounds
+        : source.constructorFormals().bounds;
+    Set<String> hidden = new HashSet<String>();
+    int previous;
+    do {
+      previous = hidden.size();
+      for (Map.Entry<String, List<JniSignature.Value>> formal : bounds.entrySet()) {
+        for (JniSignature.Value bound : formal.getValue()) {
+          Set<String> variables = new HashSet<String>();
+          bound.variables(variables);
+          if (!Collections.disjoint(hidden, variables) || !constructorTypeAccessible(sourceType(bound), model)) {
+            hidden.add(formal.getKey());
+          }
+        }
+      }
+    } while (hidden.size() != previous);
+    for (int i = 0; i < arguments.size(); i++) {
+      JniSignature.Value argument = arguments.get(i);
+      Set<String> variables = new HashSet<String>();
+      argument.variables(variables);
+      if (Collections.disjoint(hidden, variables) && constructorTypeAccessible(argument, model)) { continue; }
+      JniSignature.Value element = argument;
+      while (element.component != null) { element = element.component; }
+      JniSignature.Value erased = JniSignature.Value.type(argument.erase());
+      // A raw List cast can hide List<Private>, but a variable's erasure cannot
+      // express its intersection bounds. Leave that argument to null inference.
+      arguments.set(i, element.variable == null && constructorTypeAccessible(erased, model) ? erased : null);
+    }
+  }
+
+  private boolean constructorTypeAccessible(JniSignature.Value type, JniClass model) throws IOException {
+    Set<String> names = new HashSet<String>();
+    type.classNames(names);
+    for (String name : names) { if (!constructorTypeAccessible(name, model)) { return false; } }
+    return true;
+  }
+
+  private JniSignature constructorSignature(JniSignature source, JniSignature.Value parent, JniClass model)
+      throws IOException {
+    Set<String> types = new HashSet<String>();
+    parent.classNames(types);
+    for (List<JniSignature.Value> bounds : source.constructorFormals().bounds.values()) {
+      for (JniSignature.Value bound : bounds) { sourceType(bound).classNames(types); }
+    }
+    for (JniSignature.Value parameter : source.parameters) { sourceType(parameter).classNames(types); }
+    Set<String> reserved = new HashSet<String>();
+    reserved.add("java"); // throws java.lang.Throwable
+    reserved.add(model.simple());
+    for (String name : types) { Collections.addAll(reserved, metadata.sourceName(name).split("\\.")); }
+    // Constructor formals have a new scope: their original names may capture a
+    // specialized class name or even a package prefix in a qualified source name.
+    return source.renameConstructor(reserved);
+  }
+
+  private boolean constructorTypeAccessible(String name, JniClass model) throws IOException {
+    metadata.sourceName(name);
+    JniClass parameter = metadata.resolve(name);
+    while (true) {
+      if (!accessible(parameter.nesting == null ? parameter.access : parameter.nesting.access,
+          parameter, model, false)) { return false; }
+      if (parameter.outer() == null) { return true; }
+      parameter = metadata.resolve(parameter.outer());
+    }
   }
 
   private boolean accessible(int access, JniClass owner, JniClass context, boolean constructor) throws IOException {

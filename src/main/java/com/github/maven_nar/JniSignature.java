@@ -158,10 +158,31 @@ final class JniSignature extends SignatureVisitor {
     return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString(), resolved);
   }
 
-  JniSignature constructorFormals() {
+  JniSignature renameConstructor(Set<String> reserved) {
+    Map<String, String> names = new HashMap<String, String>();
+    int index = 0;
+    for (String name : bounds.keySet()) {
+      String fresh;
+      do { fresh = "_NarConstructor" + index++; } while (!reserved.add(fresh));
+      names.put(name, fresh);
+    }
+    JniSignature renamed = new JniSignature();
+    for (Map.Entry<String, List<Value>> formal : bounds.entrySet()) {
+      List<Value> values = new ArrayList<Value>();
+      for (Value bound : formal.getValue()) { values.add(bound.rename(names)); }
+      renamed.bounds.put(names.get(formal.getKey()), values);
+    }
+    for (Value parameter : parameters) { renamed.parameters.add(parameter.rename(names)); }
+    renamed.result = result == null ? null : result.rename(names);
+    return renamed;
+  }
+
+  JniSignature constructorFormals() { return constructorFormals(parameters); }
+
+  JniSignature constructorFormals(List<Value> arguments) {
     JniSignature result = new JniSignature();
     Set<String> needed = new HashSet<String>();
-    for (Value parameter : parameters) { parameter.variables(needed); }
+    for (Value argument : arguments) { if (argument != null) { argument.variables(needed); } }
     int previous;
     do {
       previous = needed.size();

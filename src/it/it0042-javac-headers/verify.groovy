@@ -21,6 +21,7 @@
 // therefore come from the dependency's compiled classes.
 File headers = new File(basedir, 'consumer/target/nar/javah-include')
 assert headers.list().toList().sort() == ['dependency_Container_Api.h', 'dependency_Constants.h', 'dependency_GenericApi.h', 'dependency_Payload.h'].sort()
+// Base's constructor type parameter java must not shadow qualified names in the generated source.
 String api = new File(headers, 'dependency_Container_Api.h').text
 assert api.contains('Java_dependency_Container_00024Api_call')
 assert api.contains('jthrowable, jintArray')
@@ -43,6 +44,7 @@ assert !generic.contains('Java_dependency_GenericApi_items')
 // TextList<?> carries CharSequence's bound through Collection; its implementation stays non-native.
 assert !generic.contains('Java_dependency_GenericApi_boundedItems')
 // Both classes are generated together; Bound<Payload> requires Comparable<Payload>.
+// Payload also needs a callable superclass constructor without naming its private type argument.
 String payload = new File(headers, 'dependency_Payload.h').text
 assert payload.contains('Java_dependency_Payload_call')
 assert !payload.contains('Java_dependency_Payload_compareTo')

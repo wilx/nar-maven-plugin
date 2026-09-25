@@ -19,8 +19,7 @@
  */
 package dependency;
 
-public class Payload extends PrivateBase<String> implements Comparable<Payload> {
-  public int compareTo(Payload other) { return 0; }
-  public Payload() { super(null); }
-  public native void call();
+public class PrivateBase<T> {
+  private static class Hidden {}
+  protected PrivateBase(java.util.List<Hidden> values) {}
 }
