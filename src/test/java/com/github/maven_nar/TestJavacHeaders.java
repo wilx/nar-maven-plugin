@@ -95,7 +95,7 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
-  public void testConstructorRetriesDistinguishSameFileNames() throws Exception {
+  public void testConstructorSelectionWithSameFileNames() throws Exception {
     compile(classes, expected,
         "dep/Base.java", "package dep; public class Base<T> { private static class A {} private static class B {}"
         + " protected Base(A value) {} protected Base(B value) {} protected Base(A value, int other) {} }",
@@ -106,7 +106,7 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
-  public void testConstructorRetriesForNestedTargets() throws Exception {
+  public void testConstructorSelectionForNestedTargets() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base<T> { private static class A {} private static class B {}"
         + " protected Base(A value) {} protected Base(B value) {} protected Base(A value, int other) {} }",
@@ -116,7 +116,7 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
-  public void testConstructorRetryAddsSupportingMember() throws Exception {
+  public void testConstructorSelectionAddsSupportingMember() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base<T> { private static class A {} private static class B {}"
         + " protected Base(A value) {} protected Base(B value) {} protected Base(A value, Api.Marker marker) {} }",
@@ -135,7 +135,7 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
-  public void testExhaustedConstructorRetriesPreserveHeaders() throws Exception {
+  public void testAmbiguousConstructorsFailBeforeCompilationAndPreserveHeaders() throws Exception {
     compile(classes, expected, "Api.java", "public class Api { public native int call(); }");
     generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
     byte[] original = Files.readAllBytes(new File(actual, "Api.h").toPath());
@@ -143,11 +143,11 @@ public class TestJavacHeaders extends TestCase {
         "Base.java", "public class Base<T> { private static class A {} private static class B {}"
         + " protected Base(A value) {} protected Base(B value) {} public static A value() { return null; } }",
         "Api.java", "public class Api extends Base<String> { public Api() { super(Base.value()); } public native void call(); }");
-    failure("rejected by javac", Collections.<String>emptySet());
+    FileUtils.deleteDirectory(new File(work, "generated"));
+    failure("ambiguous", Collections.<String>emptySet());
     assertTrue(Arrays.equals(original, Files.readAllBytes(new File(actual, "Api.h").toPath())));
-    String diagnostics = text(new File(work, "generated/javac.log"));
-    assertTrue("Keep the compiler's explanation", diagnostics.contains("ambiguous"));
-    assertFalse("Equivalent rejected calls must not be retried", diagnostics.contains("Compilation attempt 2:"));
+    assertFalse("Reject ambiguous constructors before starting compilation",
+        new File(work, "generated/javac.args").exists());
   }
 
   public void testPrivateConstructorNullOverloadAlternative() throws Exception {
@@ -1523,6 +1523,10 @@ public class TestJavacHeaders extends TestCase {
     new JavacHeaders(TestJavah.jdkTool("javac"), new File(work, "generated"), paths,
         Collections.<File>emptyList(), new SystemStreamLog())
         .generate(scanned, set("**/*.class"), excludes, extras, actual);
+    File diagnostics = new File(work, "generated/javac.log");
+    if (diagnostics.isFile()) {
+      assertFalse("Select a valid call before compiling", text(diagnostics).contains("Compilation attempt 2:"));
+    }
   }
 
   private void compile(File destination, File headers, String... sources) throws Exception {
