@@ -1879,6 +1879,89 @@ public class TestJavacHeaders extends TestCase {
     failure("Containment cycle", set("A"));
   }
 
+  public void testGenericConstructorInferredUncheckedException() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}",
+      "Throwable.java", "public class Throwable {}",
+      "Base.java", "import java.lang.Exception; public class Base { protected <E extends Exception> Base() throws E {} }",
+      "java.java", "public class java extends Base { public native void call(Exception e, Throwable t); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testAlternativeNonthrowingConstructor() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}",
+      "Throwable.java", "public class Throwable {}",
+      "Base.java", "import java.lang.Exception; public class Base { protected Base() throws Exception {} protected Base(int value) {} }",
+      "java.java", "public class java extends Base { public java(){super(0);} public native void call(Exception e, Throwable t); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testNestedExceptionsAcrossGeneratedParents() throws Exception {
+    compile(classes, expected, "Owner.java", "public class Owner { public static class Problem extends Exception { public native void problem(); } public static class Base { protected Base() throws Problem {} } }",
+      "Middle.java", "public class Middle extends Owner.Base { public Middle() throws Owner.Problem {} public native void middle(); }",
+      "Api.java", "public class Api extends Middle { public Api() throws Owner.Problem {} public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGenericConstructorWithRecursiveBoundsAndThrows() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { protected <E extends Exception & Runnable> Base(java.util.List<E> values) throws E {} }",
+      "Api.java", "public class Api extends Base { public Api() throws Exception { super(null); } public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGenericConstructorOwnerAndExceptionBindings() throws Exception {
+    compile(classes, expected, "Owner.java", "public class Owner<E extends Exception> { public class Base { protected <T extends Comparable<T>> Base(java.util.List<T> values) throws E {} } }",
+      "Api.java", "public class Api extends Owner<java.io.IOException>.Base { public Api(Owner<java.io.IOException> o) throws java.io.IOException { o.super(null); } public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testInheritedArrayReturnMeetsBothContracts() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { public Object[] value(){return null;} }",
+      "Middle.java", "public class Middle extends Base { public String[] value(){return null;} public native void middle(); }",
+      "Contract.java", "public interface Contract { java.io.Serializable value(); }",
+      "Api.java", "public class Api extends Middle implements Contract { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testPreciseConstructorExceptionMissingMarker() throws Exception {
+    compile(classes, expected, "Marker.java", "public interface Marker {}",
+      "Problem.java", "public class Problem extends RuntimeException implements Marker {}",
+      "Base.java", "public class Base { protected Base() throws Problem {} }",
+      "Api.java", "public class Api extends Base { public native void call(); }");
+    assertTrue(new File(classes, "Marker.class").delete()); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGenericConstructorInferredUncheckedThrowable() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}",
+        "Throwable.java", "public class Throwable {}",
+        "Base.java", "import java.lang.Throwable; public class Base { protected <E extends Throwable> Base() throws E {} }",
+        "java.java", "public class java extends Base { public native void call(Exception e, Throwable t); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGenericConstructorDependentExceptionBounds() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base {"
+        + " protected <T extends Exception, E extends T> Base(T value) throws E {} }",
+        "Api.java", "public class Api extends Base { public Api() throws Exception { super(null); }"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGenericConstructorSpecificCheckedException() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base {"
+        + " protected <E extends java.io.IOException> Base() throws E {} }",
+        "Api.java", "public class Api extends Base { public Api() throws java.io.IOException {} public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testAlternativeConstructorWithSupportingMember() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}",
+        "Throwable.java", "public class Throwable {}",
+        "Owner.java", "public class Owner { public native void owner(); public static class Argument {} }",
+        "Base.java", "import java.lang.Exception; public class Base {"
+        + " protected Base() throws Exception {} protected Base(Owner.Argument value) {} }",
+        "java.java", "public class java extends Base { public java(){super(null);}"
+        + " public native void call(Exception e, Throwable t); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);
