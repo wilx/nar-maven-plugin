@@ -60,6 +60,8 @@ final class JavacHeaders {
   private final Map<String, List<JniClass.Method>> interfaceMethods = new HashMap<String, List<JniClass.Method>>();
   private final Map<String, JniSignature> signatures = new HashMap<String, JniSignature>();
   private final Set<String> references = new HashSet<String>();
+  private final Map<String, Set<String>> rejectedConstructors = new HashMap<String, Set<String>>();
+  private final Map<String, String> constructorLocations = new TreeMap<String, String>();
 
   JavacHeaders(File javac, File work, List<File> classPath, List<File> bootClassPath, Log log) throws IOException {
     this.javac = javac;
@@ -119,47 +121,10 @@ final class JavacHeaders {
     }
     prepare();
 
-    // Everything is validated before writing sources or touching published headers.
     File sources = new File(work, "sources");
     File compiled = new File(work, "classes");
     File staged = new File(work, "headers");
-    FileUtils.deleteDirectory(work);
-    Files.createDirectories(sources.toPath());
-    Files.createDirectories(compiled.toPath());
-    Files.createDirectories(staged.toPath());
-    List<String> args = new ArrayList<String>();
-    Collections.addAll(args, "-encoding", "UTF-8", "-proc:none", "-implicit:none",
-        "-sourcepath", sources.getAbsolutePath(), "-classpath", path(classPath),
-        "-d", compiled.getAbsolutePath(), "-h", staged.getAbsolutePath());
-    if (!bootClassPath.isEmpty()) { Collections.addAll(args, "-bootclasspath", path(bootClassPath)); }
-    for (JniClass model : declarations.values()) {
-      if (model.outer() != null) { continue; }
-      StringBuilder source = new StringBuilder();
-      if (!model.packageName().isEmpty()) {
-        source.append("package ").append(model.packageName().replace('/', '.')).append(";\n");
-      }
-      emit(model, source, "");
-      File file = new File(sources, model.name + ".java");
-      Files.createDirectories(file.getParentFile().toPath());
-      Files.write(file.toPath(), source.toString().getBytes(StandardCharsets.UTF_8));
-      args.add(file.getAbsolutePath());
-    }
-    StringBuilder argumentFile = new StringBuilder();
-    for (String arg : args) {
-      argumentFile.append('"').append(arg.replace("\\", "\\\\").replace("\"", "\\\""))
-          .append('"').append('\n');
-    }
-    File arguments = new File(work, "javac.args");
-    Files.write(arguments.toPath(), argumentFile.toString().getBytes(StandardCharsets.UTF_8));
-    log.info("Generating JNI headers with " + javac + " for " + targets.size() + " classes");
-    try {
-      String diagnostics = run(Arrays.asList(javac.getAbsolutePath(), "-J-Dfile.encoding=UTF-8", "@" + arguments.getAbsolutePath()));
-      Files.write(new File(work, "javac.log").toPath(), diagnostics.getBytes(StandardCharsets.UTF_8));
-      if (!diagnostics.trim().isEmpty()) { log.info(diagnostics); }
-    } catch (IOException ex) {
-      Files.write(new File(work, "javac.log").toPath(), ex.getMessage().getBytes(StandardCharsets.UTF_8));
-      throw ex;
-    }
+    compileHeaders(sources, compiled, staged);
     for (String name : targets) {
       if (!new File(staged, header(name)).isFile()) {
         throw new IOException("javac did not generate the requested JNI header " + header(name) + " for " + name);
@@ -171,6 +136,93 @@ final class JavacHeaders {
       Files.copy(new File(staged, header(name)).toPath(), new File(output, header(name)).toPath(),
           StandardCopyOption.REPLACE_EXISTING);
     }
+  }
+
+  private void compileHeaders(File sources, File compiled, File staged) throws IOException {
+    FileUtils.deleteDirectory(work);
+    log.info("Generating JNI headers with " + javac + " for " + targets.size() + " classes");
+    StringBuilder diagnostics = new StringBuilder();
+    int attempt = 0;
+    while (true) {
+      // Failed javac runs can leave partial output. Every candidate is checked
+      // with all source units again, and only the successful run is published.
+      for (File directory : Arrays.asList(sources, compiled, staged)) {
+        FileUtils.deleteDirectory(directory);
+        Files.createDirectories(directory.toPath());
+      }
+      constructorLocations.clear();
+      File arguments = writeSources(sources, compiled, staged);
+      diagnostics.append("Compilation attempt ").append(++attempt).append(":\n");
+      try {
+        // Match diagnostics to the exact generated file and constructor line.
+        // Pin the diagnostic language, without depending on overload error text.
+        String output = run(Arrays.asList(javac.getAbsolutePath(), "-J-Dfile.encoding=UTF-8",
+            "-J-Duser.language=en", "-J-Duser.country=US", "@" + arguments.getAbsolutePath()));
+        diagnostics.append(output);
+        Files.write(new File(work, "javac.log").toPath(), diagnostics.toString().getBytes(StandardCharsets.UTF_8));
+        if (!output.trim().isEmpty()) { log.info(output); }
+        return;
+      } catch (IOException ex) {
+        diagnostics.append(ex.getMessage()).append('\n');
+        Files.write(new File(work, "javac.log").toPath(), diagnostics.toString().getBytes(StandardCharsets.UTF_8));
+        if (!rejectConstructorCalls(ex.getMessage())) { throw ex; }
+        try { prepare(); }
+        catch (IOException exhausted) {
+          throw new IOException(exhausted.getMessage() + "\n" + ex.getMessage(), exhausted);
+        }
+      }
+    }
+  }
+
+  private File writeSources(File sources, File compiled, File staged) throws IOException {
+    List<String> args = new ArrayList<String>();
+    Collections.addAll(args, "-encoding", "UTF-8", "-proc:none", "-implicit:none",
+        "-sourcepath", sources.getAbsolutePath(), "-classpath", path(classPath),
+        "-d", compiled.getAbsolutePath(), "-h", staged.getAbsolutePath());
+    if (!bootClassPath.isEmpty()) { Collections.addAll(args, "-bootclasspath", path(bootClassPath)); }
+    for (JniClass model : declarations.values()) {
+      if (model.outer() != null) { continue; }
+      StringBuilder source = new StringBuilder();
+      if (!model.packageName().isEmpty()) {
+        source.append("package ").append(model.packageName().replace('/', '.')).append(";\n");
+      }
+      File file = new File(sources, model.name + ".java").getCanonicalFile();
+      emit(model, source, "", file);
+      Files.createDirectories(file.getParentFile().toPath());
+      Files.write(file.toPath(), source.toString().getBytes(StandardCharsets.UTF_8));
+      args.add(file.getAbsolutePath());
+    }
+    StringBuilder argumentFile = new StringBuilder();
+    for (String arg : args) {
+      argumentFile.append('"').append(arg.replace("\\", "\\\\").replace("\"", "\\\""))
+          .append('"').append('\n');
+    }
+    File arguments = new File(work, "javac.args");
+    Files.write(arguments.toPath(), argumentFile.toString().getBytes(StandardCharsets.UTF_8));
+    return arguments;
+  }
+
+  private boolean rejectConstructorCalls(String diagnostics) throws IOException {
+    boolean changed = false;
+    for (Map.Entry<String, String> location : constructorLocations.entrySet()) {
+      if (!diagnostics.contains(location.getKey() + " error:")) { continue; }
+      String name = location.getValue();
+      Constructor constructor = constructors.get(name);
+      if (!constructor.retryable) { continue; }
+      Set<String> rejected = rejectedConstructors.get(name);
+      if (rejected == null) { rejected = new HashSet<String>(); rejectedConstructors.put(name, rejected); }
+      if (rejected.add(constructorKey(constructor))) {
+        log.debug("Trying another superclass constructor invocation for " + name);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  private String constructorKey(Constructor constructor) throws IOException {
+    StringBuilder key = new StringBuilder();
+    emitFormals(constructor.formals, key);
+    return key.append(constructor.invocation).toString();
   }
 
   private void declare(JniClass model) throws IOException {
@@ -659,7 +711,11 @@ final class JavacHeaders {
   private static final class Constructor {
     final JniSignature formals;
     final String invocation;
-    Constructor(JniSignature formals, String invocation) { this.formals = formals; this.invocation = invocation; }
+    final boolean retryable;
+    Constructor(JniSignature formals, String invocation) { this(formals, invocation, false); }
+    Constructor(JniSignature formals, String invocation, boolean retryable) {
+      this.formals = formals; this.invocation = invocation; this.retryable = retryable;
+    }
   }
 
   private Constructor constructor(JniClass model) throws IOException {
@@ -740,8 +796,14 @@ final class JavacHeaders {
               throw new IOException("inaccessible constructor type " + name);
             }
           }
+          Constructor result = new Constructor(formals, call.append(");").toString(), true);
+          Set<String> failed = rejectedConstructors.get(model.name);
+          if (failed != null && failed.contains(constructorKey(result))) {
+            rejected.add(candidate.descriptor + " (rejected by javac)");
+            continue;
+          }
           for (String name : names) { reference(Type.getObjectType(name)); }
-          return new Constructor(formals, call.append(");").toString());
+          return result;
         } catch (IOException ex) {
           rejected.add(candidate.descriptor + (inferred ? " (inferred: " : " (") + ex.getMessage() + ")");
         }
@@ -855,7 +917,7 @@ final class JavacHeaders {
     out.append('>');
   }
 
-  private void emit(JniClass model, StringBuilder out, String indent) throws IOException {
+  private void emit(JniClass model, StringBuilder out, String indent, File file) throws IOException {
     out.append(indent).append(access(model.nesting == null ? model.access : model.nesting.access));
     if (model.outer() != null && (model.nesting.access & Opcodes.ACC_STATIC) != 0) { out.append("static "); }
     if (!model.isEnum() && !model.isRecord() && hasSealedParent(model)) { out.append("non-sealed "); }
@@ -886,6 +948,9 @@ final class JavacHeaders {
     }
     if (!model.isInterface() && !model.isEnum() && !model.isRecord()) {
       Constructor constructor = constructors.get(model.name);
+      int line = 1;
+      for (int i = 0; i < out.length(); i++) { if (out.charAt(i) == '\n') { line++; } }
+      constructorLocations.put(file.getPath() + ":" + line + ":", model.name);
       out.append(indent).append("  protected ");
       if (!constructor.formals.bounds.isEmpty()) { emitFormals(constructor.formals, out); out.append(' '); }
       out.append(model.simple()).append("() throws java.lang.Throwable { ")
@@ -937,7 +1002,7 @@ final class JavacHeaders {
       }
     }
     for (JniClass child : declarations.values()) {
-      if (model.name.equals(child.outer())) { emit(child, out, indent + "  "); }
+      if (model.name.equals(child.outer())) { emit(child, out, indent + "  ", file); }
     }
     out.append(indent).append("}\n");
   }

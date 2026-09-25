@@ -95,6 +95,61 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testConstructorRetriesDistinguishSameFileNames() throws Exception {
+    compile(classes, expected,
+        "dep/Base.java", "package dep; public class Base<T> { private static class A {} private static class B {}"
+        + " protected Base(A value) {} protected Base(B value) {} protected Base(A value, int other) {} }",
+        "dep/Only.java", "package dep; public class Only { private static class A {} protected Only(A value) {} }",
+        "left/Api.java", "package left; public class Api extends dep.Base<String> { public Api() { super(null, 0); } public native void call(); }",
+        "right/Api.java", "package right; public class Api extends dep.Only { public Api() { super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorRetriesForNestedTargets() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private static class A {} private static class B {}"
+        + " protected Base(A value) {} protected Base(B value) {} protected Base(A value, int other) {} }",
+        "Outer.java", "public class Outer extends Base<String> { public Outer() { super(null, 0); } public native void outer();"
+        + " public static class Inner extends Base<Integer> { public Inner() { super(null, 0); } public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testConstructorRetryAddsSupportingMember() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { private static class A {} private static class B {}"
+        + " protected Base(A value) {} protected Base(B value) {} protected Base(A value, Api.Marker marker) {} }",
+        "Api.java", "public class Api extends Base<String> { public interface Marker {}"
+        + " public Api() { super(null, null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testAmbiguousTypedConstructorAlternative() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base<T> { protected <U extends Runnable & java.io.Serializable> Base(U value) {}"
+        + " protected <U extends java.io.Serializable & Runnable, V> Base(U value) {} protected Base(int a, int b) {} }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super(0, 0); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testExhaustedConstructorRetriesPreserveHeaders() throws Exception {
+    compile(classes, expected, "Api.java", "public class Api { public native int call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    byte[] original = Files.readAllBytes(new File(actual, "Api.h").toPath());
+    compile(classes, null,
+        "Base.java", "public class Base<T> { private static class A {} private static class B {}"
+        + " protected Base(A value) {} protected Base(B value) {} public static A value() { return null; } }",
+        "Api.java", "public class Api extends Base<String> { public Api() { super(Base.value()); } public native void call(); }");
+    failure("rejected by javac", Collections.<String>emptySet());
+    assertTrue(Arrays.equals(original, Files.readAllBytes(new File(actual, "Api.h").toPath())));
+    String diagnostics = text(new File(work, "generated/javac.log"));
+    assertTrue("Keep the compiler's explanation", diagnostics.contains("ambiguous"));
+    assertFalse("Equivalent rejected calls must not be retried", diagnostics.contains("Compilation attempt 2:"));
+  }
+
   public void testPrivateConstructorNullOverloadAlternative() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base<T> { private static class Hidden {}"
@@ -1322,7 +1377,8 @@ public class TestJavacHeaders extends TestCase {
     Files.write(new File(classes, "Api.class").toPath(), writer.toByteArray());
     failure("failed (exit", Collections.<String>emptySet());
     assertTrue(Arrays.equals(original, Files.readAllBytes(new File(actual, "Api.h").toPath())));
-    assertTrue(new File(work, "generated/javac.log").isFile());
+    String diagnostics = text(new File(work, "generated/javac.log"));
+    assertFalse("Unrelated compiler errors must not change constructors", diagnostics.contains("Compilation attempt 2:"));
   }
 
   public void testMultiReleaseJarUsesCompilerVersion() throws Exception {
