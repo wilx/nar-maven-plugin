@@ -249,8 +249,11 @@ noarch area in the target directory.
  relationships are reconstructed. Real signature types and superclasses must be
  available on the classpath. Types used only in omitted methods or unrelated fields are not eagerly
  resolved. Superclass constructors must have an accessible, source-expressible
- invocation; failures identify the class and constructor candidates. Throwaway
- constructors retain required type parameters and all their bounds when casting
+ invocation; failures identify the class and constructor candidates. Checked
+ constructor exceptions are specialized for the selected superclass type; unchecked
+ exceptions require no throws clause. Inaccessible or shadowed checked exception
+ names use the nearest usable superclass, and generated subclasses follow the
+ throws clause actually emitted for their parent. Throwaway constructors retain required type parameters and all their bounds when casting
  arguments to generic superclass constructors, using fresh names to avoid shadowing
  classes or package names. Fully typed constructor calls are preferred. When private
  generic types cannot be named, calls using raw casts are tried before calls requiring
@@ -284,7 +287,8 @@ noarch area in the target directory.
  when needed for valid supporting overrides. Compiler-generated bridge adapters do
  not replace source overrides. Inherited methods are checked against the reconstructed
  superclass declarations, with generic throws clauses specialized alongside return
- and parameter types. Native signatures remain erased. Unrelated methods remain omitted. Required contract signature types,
+ and parameter types. Supporting return types satisfy both the retained superclass
+ method and all retained interface contracts. Native signatures remain erased. Unrelated methods remain omitted. Required contract signature types,
  including generic argument types needed by the compiler's inheritance checks, must
  be available on the classpath.
 

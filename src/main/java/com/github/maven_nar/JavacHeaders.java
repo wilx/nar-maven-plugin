@@ -58,6 +58,7 @@ final class JavacHeaders {
   private final Map<String, JniClass> declarations = new TreeMap<String, JniClass>();
   private final Map<String, Constructor> constructors = new HashMap<String, Constructor>();
   private final Map<String, List<JniClass.Method>> interfaceMethods = new HashMap<String, List<JniClass.Method>>();
+  private final Map<String, List<String>> emittedConstructorExceptions = new HashMap<String, List<String>>();
   private final Map<String, JniSignature> signatures = new HashMap<String, JniSignature>();
   private final Map<String, JniSourceNames> sourceUnits = new HashMap<String, JniSourceNames>();
   private JniSourceNames sourceNames;
@@ -210,6 +211,13 @@ final class JavacHeaders {
         "-sourcepath", sources.getAbsolutePath(), "-classpath", path(classPath),
         "-d", compiled.getAbsolutePath(), "-h", staged.getAbsolutePath());
     if (!bootClassPath.isEmpty()) { Collections.addAll(args, "-bootclasspath", path(bootClassPath)); }
+    // Reserve unqualified bindings in every unit before planning imports for
+    // constructor exceptions. A generated superclass may need a wider exception
+    // spelling; subclasses must declare that actual emitted type too.
+    for (JniClass model : declarations.values()) {
+      if (model.outer() == null) { emit(model, new StringBuilder(), ""); }
+    }
+    for (JniSourceNames names : sourceUnits.values()) { names.finishCollecting(); }
     for (JniClass model : declarations.values()) {
       if (model.outer() != null) { continue; }
       StringBuilder source = new StringBuilder();
@@ -217,10 +225,6 @@ final class JavacHeaders {
         source.append("package ").append(model.packageName().replace('/', '.')).append(";\n");
       }
       File file = new File(sources, model.name + ".java").getCanonicalFile();
-      // Plan unqualified bindings for the entire unit, including nested types,
-      // before choosing imports. This is a source-name pass, not a compiler retry.
-      emit(model, new StringBuilder(), "");
-      names(model).finishCollecting();
       StringBuilder body = new StringBuilder();
       emit(model, body, "");
       for (String imported : names(model).imports()) { source.append("import ").append(imported).append(";\n"); }
@@ -253,6 +257,7 @@ final class JavacHeaders {
       sourceUnits.clear();
       sourceVariables = Collections.emptyMap();
       constructors.clear();
+      emittedConstructorExceptions.clear();
       interfaceMethods.clear();
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) {
         for (String iface : model.interfaces) { reference(Type.getObjectType(iface)); }
@@ -528,17 +533,20 @@ final class JavacHeaders {
       JniClass.Method own = implementations.get(entry.getKey());
       // An abstract declaration may omit an interface implementation, but cannot
       // inherit a superclass member with an incompatible return, access or throws.
-      boolean reconcileSuperclass = needsSuperclassOverride(model, entry.getKey(), contracts);
+      Contract superclass = superclassContract(model, entry.getKey());
+      boolean reconcileSuperclass = needsSuperclassOverride(superclass, contracts);
       if (!reconcileSuperclass && contracts.size() == 1 && hasDefault) { continue; }
       boolean concrete = model.isEnum() || model.isRecord();
       if (!reconcileSuperclass && !concrete && !hasDefault && contracts.size() == 1) { continue; }
       if (targets.contains(model.name) && own != null && (own.access & Opcodes.ACC_NATIVE) != 0) { continue; }
       // Do not override retained superclass implementations, notably Enum's final methods.
       if (!reconcileSuperclass && own == null && inheritsImplementation(model, entry.getKey())) { continue; }
-      JniClass.Method contract = compatibleReturn(contracts);
+      List<Contract> returns = new ArrayList<Contract>(contracts);
+      if (superclass != null) { returns.add(superclass); }
+      JniClass.Method contract = compatibleReturn(returns);
       if (!reconcileSuperclass && !concrete && !hasDefault && contract != null) { continue; }
       JniClass.Method method = own == null ? contract : own;
-      if (method == null) { method = inheritedContractOverride(model, entry.getKey(), contracts); }
+      if (method == null) { method = inheritedContractOverride(model, entry.getKey(), returns); }
       if (method == null) {
         throw new IOException("No compatible interface return type for " + model.name + "." + entry.getKey());
       }
@@ -549,8 +557,8 @@ final class JavacHeaders {
 
   private JniClass.Method inheritedContractOverride(JniClass model, String key, List<Contract> contracts)
       throws IOException {
-    // Neither interface's return need implement the other. An omitted ancestor
-    // may have supplied their common subtype; retain it only when necessary.
+    // An omitted ancestor may have supplied the common subtype required by
+    // both the retained superclass and interfaces. Retain it only when necessary.
     TypeView type = declarationView(model);
     while (type.model.parent != null) {
       type = parents(type).get(0);
@@ -569,7 +577,7 @@ final class JavacHeaders {
     return null;
   }
 
-  private boolean needsSuperclassOverride(JniClass model, String key, List<Contract> contracts) throws IOException {
+  private Contract superclassContract(JniClass model, String key) throws IOException {
     TypeView type = declarationView(model);
     while (type.model.parent != null) {
       type = parents(type).get(0);
@@ -585,20 +593,26 @@ final class JavacHeaders {
             && !type.model.packageName().equals(model.packageName())) { continue; }
         JniClass.Method inherited = type.method(original);
         if (!key.equals(methodKey(inherited))) { continue; }
-        if ((inherited.access & Opcodes.ACC_PUBLIC) == 0) { return true; }
-        for (Contract contract : contracts) {
-          if (!compatibleReturn(inherited, contract.method)) { return true; }
-          for (String exception : inherited.exceptions) {
-            if (contract.method.exceptions.contains(exception)) { continue; }
-            if (subtype(exception, "java/lang/RuntimeException") || subtype(exception, "java/lang/Error")) { continue; }
-            boolean allowed = false;
-            for (String declared : contract.method.exceptions) {
-              if (subtype(exception, declared)) { allowed = true; break; }
-            }
-            if (!allowed) { return true; }
-          }
+        return new Contract(type.model.name, inherited);
+      }
+    }
+    return null;
+  }
+
+  private boolean needsSuperclassOverride(Contract superclass, List<Contract> contracts) throws IOException {
+    if (superclass == null) { return false; }
+    JniClass.Method inherited = superclass.method;
+    if ((inherited.access & Opcodes.ACC_PUBLIC) == 0) { return true; }
+    for (Contract contract : contracts) {
+      if (!compatibleReturn(inherited, contract.method)) { return true; }
+      for (String exception : inherited.exceptions) {
+        if (contract.method.exceptions.contains(exception)) { continue; }
+        if (subtype(exception, "java/lang/RuntimeException") || subtype(exception, "java/lang/Error")) { continue; }
+        boolean allowed = false;
+        for (String declared : contract.method.exceptions) {
+          if (subtype(exception, declared)) { allowed = true; break; }
         }
-        return false;
+        if (!allowed) { return true; }
       }
     }
     return false;
@@ -826,17 +840,17 @@ final class JavacHeaders {
     final JniSignature formals;
     final JniSignature.Value owner;
     final List<JniSignature.Value> arguments;
-    final boolean throwsThrowable;
+    final List<String> exceptions;
     Constructor(JniSignature formals, JniSignature.Value owner, List<JniSignature.Value> arguments,
-        boolean throwsThrowable) {
+        List<String> exceptions) {
       this.formals = formals; this.owner = owner; this.arguments = arguments;
-      this.throwsThrowable = throwsThrowable;
+      this.exceptions = exceptions;
     }
   }
 
   private Constructor constructor(JniClass model) throws IOException {
     if (model.parent == null) { return new Constructor(JniSignature.read(null), null,
-        Collections.<JniSignature.Value>emptyList(), false); }
+        Collections.<JniSignature.Value>emptyList(), Collections.<String>emptyList()); }
     JniSignature.Value parentType = emittedSuperclass(declarationView(model));
     TypeView parentView = view(parentType);
     JniClass parent = parentView.model;
@@ -849,7 +863,7 @@ final class JavacHeaders {
       skip = 1;
     }
     if (declarations.containsKey(parent.name)) {
-      return new Constructor(JniSignature.read(null), owner, Collections.<JniSignature.Value>emptyList(), false);
+      return new Constructor(JniSignature.read(null), owner, Collections.<JniSignature.Value>emptyList(), Collections.<String>emptyList());
     }
     List<JniClass.Method> candidates = new ArrayList<JniClass.Method>(parent.constructors);
     Collections.sort(candidates, new Comparator<JniClass.Method>() {
@@ -906,11 +920,20 @@ final class JavacHeaders {
           }
           JniConstructorResolver.Candidate selected = constructorResolver().resolve(values, formals.bounds,
               constructorOverloads(parentView, model, values.size()));
-          boolean throwing = false;
+          List<String> exceptions = new ArrayList<String>();
           for (JniClass.Method overload : parent.constructors) {
-            if (overload.descriptor.equals(selected.descriptor)) { throwing = !overload.exceptions.isEmpty(); break; }
+            if (!overload.descriptor.equals(selected.descriptor)) { continue; }
+            for (String exception : parentView.method(overload).exceptions) {
+              // Receiver substitutions matter here too: Base<RuntimeException>
+              // does not require a throws clause for a constructor declaring E.
+              if (subtype(exception, "java/lang/RuntimeException") || subtype(exception, "java/lang/Error")) { continue; }
+              String visible = constructorException(exception, model, null);
+              if (!exceptions.contains(visible)) { exceptions.add(visible); }
+              names.add(visible);
+            }
+            break;
           }
-          Constructor result = new Constructor(formals, owner, values, throwing);
+          Constructor result = new Constructor(formals, owner, values, exceptions);
           for (String name : names) { reference(Type.getObjectType(name)); }
           return result;
         } catch (IOException ex) {
@@ -922,19 +945,59 @@ final class JavacHeaders {
         + ": no accessible, source-expressible constructor " + rejected);
   }
 
-  private boolean constructorThrows(JniClass model) {
-    if (declarations.containsKey(model.parent)) { return constructorThrows(declarations.get(model.parent)); }
-    return constructors.get(model.name).throwsThrowable;
+  private String constructorException(String name, JniClass model, JniSourceNames names) throws IOException {
+    String original = name;
+    Set<String> visited = new HashSet<String>();
+    while (name != null && !"java/lang/Object".equals(name) && visited.add(name)) {
+      JniClass exception = metadata.resolve(name);
+      try {
+        if (constructorTypeAccessible(name, model)) {
+          if (names != null) { names.name(name); }
+          return name;
+        }
+      } catch (IOException unexpressible) {
+        // A checked exception may be private or hidden by a source name. Its
+        // nearest expressible superclass still covers the selected super call.
+      }
+      name = exception.parent;
+    }
+    throw new IOException("Cannot express constructor exception " + original + " for " + model.name);
+  }
+
+  private List<String> constructorThrows(JniClass model) throws IOException {
+    List<String> cached = emittedConstructorExceptions.get(model.name);
+    if (cached != null) { return cached; }
+    boolean collecting = names(model).isCollecting();
+    List<String> inherited = model.parent != null && declarations.containsKey(model.parent)
+        ? constructorThrows(declarations.get(model.parent)) : constructors.get(model.name).exceptions;
+    List<String> result = new ArrayList<String>();
+    JniSourceNames names = names(model); // Restore this lexical scope after visiting a source superclass.
+    for (String exception : inherited) {
+      String visible = constructorException(exception, model, collecting ? null : names);
+      if (!result.contains(visible)) { result.add(visible); }
+    }
+    if (!collecting) { emittedConstructorExceptions.put(model.name, result); }
+    return result;
   }
 
   private void emitConstructor(JniClass model, StringBuilder out, String indent) throws IOException {
     Constructor constructor = constructors.get(model.name);
+    List<String> exceptions = constructorThrows(model);
+    sourceNames = names(model);
+    // Constructor formals must not capture exception names introduced after
+    // overload selection, including a widened exception from a source parent.
+    JniSignature used = JniSignature.read(null);
+    used.bounds.putAll(constructor.formals.bounds);
+    if (constructor.owner != null) { used.parents.add(constructor.owner); }
+    for (JniSignature.Value argument : constructor.arguments) { if (argument != null) { used.parameters.add(argument); } }
+    Map<String, String> enclosingVariables = sourceVariables;
+    sourceVariables = sourceNames.variables(used, "_NarConstructor", exceptions);
     out.append(indent).append("  protected ");
     if (!constructor.formals.bounds.isEmpty()) { emitFormals(constructor.formals, out); out.append(' '); }
     out.append(model.simple()).append("()");
-    // A nonthrowing super call needs no helper type. In the unnamed package,
-    // importing Throwable here can otherwise hide a real native signature type.
-    if (constructorThrows(model)) { out.append(" throws ").append(sourceNames.name("java/lang/Throwable")); }
+    for (int i = 0; i < exceptions.size(); i++) {
+      out.append(i == 0 ? " throws " : ", ").append(sourceNames.name(exceptions.get(i)));
+    }
     out.append(" { ");
     if (constructor.owner != null) { out.append("((").append(source(constructor.owner)).append(") null)."); }
     out.append("super(");
@@ -947,6 +1010,7 @@ final class JavacHeaders {
       } else { out.append(defaultValue(value.erase())); }
     }
     out.append("); }\n");
+    sourceVariables = enclosingVariables;
   }
 
   private JniConstructorResolver constructorResolver() {
@@ -1061,7 +1125,7 @@ final class JavacHeaders {
     }
     for (JniSignature.Value parameter : source.parameters) { sourceType(parameter).classNames(types); }
     Set<String> reserved = new HashSet<String>();
-    reserved.add("java"); // throws java.lang.Throwable
+    reserved.add("java"); // Qualified platform types.
     reserved.add(model.simple());
     for (String name : types) { Collections.addAll(reserved, metadata.sourceName(name).split("\\.")); }
     // Constructor formals have a new scope: their original names may capture a

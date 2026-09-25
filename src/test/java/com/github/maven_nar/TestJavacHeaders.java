@@ -165,6 +165,16 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testConstructorFormalDoesNotHideQualifiedSuperOwner() throws Exception {
+    compile(classes, expected,
+        "_NarConstructor0.java", "public class _NarConstructor0 { public class Base {"
+        + " protected <T> Base(java.util.List<T> values) {} } }",
+        "Api.java", "public class Api extends _NarConstructor0.Base {"
+        + " public Api(_NarConstructor0 owner) { owner.super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testOverrideLostInGeneratedSuperclass() throws Exception {
     compile(classes, expected,"p/Base.java", "package p; public class Base { public Object value(){return null;} }",
       "p/Contract.java", "package p; public interface Contract { String value(); }",

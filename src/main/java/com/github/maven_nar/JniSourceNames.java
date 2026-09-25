@@ -48,6 +48,8 @@ final class JniSourceNames {
 
   void scope(Set<String> shadowed) { this.shadowed = shadowed; }
 
+  boolean isCollecting() { return collecting; }
+
   void finishCollecting() { collecting = false; }
 
   Set<String> imports() { return new TreeSet<String>(imports.values()); }
@@ -97,10 +99,14 @@ final class JniSourceNames {
   }
 
   Map<String, String> variables(JniSignature signature, String prefix) throws IOException {
+    return variables(signature, prefix, Collections.<String>emptyList());
+  }
+
+  Map<String, String> variables(JniSignature signature, String prefix, List<String> additionalTypes) throws IOException {
     Set<String> reserved = new HashSet<String>(shadowed);
     reserved.addAll(imports.keySet());
     reserved.addAll(signature.bounds.keySet());
-    Set<String> types = new HashSet<String>();
+    Set<String> types = new HashSet<String>(additionalTypes);
     for (List<JniSignature.Value> bounds : signature.bounds.values()) {
       for (JniSignature.Value bound : bounds) { bound.classNames(types); }
     }
