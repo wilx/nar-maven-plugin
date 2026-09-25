@@ -158,7 +158,7 @@ final class JniSignature extends SignatureVisitor {
     Value returns = result.substitute(scope);
     source.append(')').append(returns.methodSignature());
     resolved.result = returns;
-    return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString(), resolved);
+    return new JniClass.Method(method.access, method.name, Type.getMethodDescriptor(returns.erase(), args), source.toString(), resolved, method.exceptions);
   }
 
   JniSignature renameConstructor(Set<String> reserved) {
@@ -169,12 +169,18 @@ final class JniSignature extends SignatureVisitor {
       do { fresh = "_NarConstructor" + index++; } while (!reserved.add(fresh));
       names.put(name, fresh);
     }
+    return rename(names);
+  }
+
+  JniSignature rename(Map<String, String> names) {
     JniSignature renamed = new JniSignature();
     for (Map.Entry<String, List<Value>> formal : bounds.entrySet()) {
       List<Value> values = new ArrayList<Value>();
       for (Value bound : formal.getValue()) { values.add(bound.rename(names)); }
-      renamed.bounds.put(names.get(formal.getKey()), values);
+      String name = names.containsKey(formal.getKey()) ? names.get(formal.getKey()) : formal.getKey();
+      renamed.bounds.put(name, values);
     }
+    for (Value parent : parents) { renamed.parents.add(parent.rename(names)); }
     for (Value parameter : parameters) { renamed.parameters.add(parameter.rename(names)); }
     renamed.result = result == null ? null : result.rename(names);
     return renamed;
@@ -356,19 +362,21 @@ final class JniSignature extends SignatureVisitor {
       for (Value argument : arguments) { argument.classNames(names); }
     }
 
-    String source(JniClassPath metadata) throws IOException {
+    String source(JniClassPath metadata) throws IOException { return source(metadata, null); }
+
+    String source(JniClassPath metadata, JniSourceNames names) throws IOException {
       if (wildcard == '*') { return "?"; }
       String prefix = wildcard == '+' ? "? extends " : wildcard == '-' ? "? super " : "";
       if (variable != null) { return prefix + variable; }
-      if (component != null) { return prefix + component.source(metadata) + "[]"; }
+      if (component != null) { return prefix + component.source(metadata, names) + "[]"; }
       if (name == null) { return prefix + erase().getClassName(); }
       StringBuilder text = new StringBuilder(prefix);
-      text.append(owner == null ? metadata.sourceName(name) : owner.source(metadata) + "." + metadata.resolve(name).simple());
+      text.append(owner == null ? (names == null ? metadata.sourceName(name) : names.name(name)) : owner.source(metadata, names) + "." + metadata.resolve(name).simple());
       if (!arguments.isEmpty()) {
         text.append('<');
         for (int i = 0; i < arguments.size(); i++) {
           if (i != 0) { text.append(", "); }
-          text.append(arguments.get(i).source(metadata));
+          text.append(arguments.get(i).source(metadata, names));
         }
         text.append('>');
       }

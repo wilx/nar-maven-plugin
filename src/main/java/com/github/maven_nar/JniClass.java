@@ -83,7 +83,8 @@ final class JniClass extends ClassVisitor {
 
   @Override
   public MethodVisitor visitMethod(int flags, String method, String descriptor, String signature, String[] exceptions) {
-    Method entry = new Method(flags, method, descriptor, signature);
+    Method entry = new Method(flags, method, descriptor, signature, null,
+        exceptions == null ? java.util.Collections.<String>emptyList() : java.util.Arrays.asList(exceptions));
     if ((flags & (Opcodes.ACC_STATIC | Opcodes.ACC_PRIVATE)) == 0
         && !method.startsWith("<")) { instanceMethods.add(entry); }
     if ((flags & Opcodes.ACC_NATIVE) != 0) { natives.add(entry); }
@@ -117,12 +118,17 @@ final class JniClass extends ClassVisitor {
     final String signature;
     // Specialized source types retain bounds from enclosing generic declarations.
     final JniSignature source;
+    final List<String> exceptions;
     Method(int access, String name, String descriptor) { this(access, name, descriptor, null); }
     Method(int access, String name, String descriptor, String signature) {
       this(access, name, descriptor, signature, null);
     }
     Method(int access, String name, String descriptor, String signature, JniSignature source) {
+      this(access, name, descriptor, signature, source, java.util.Collections.<String>emptyList());
+    }
+    Method(int access, String name, String descriptor, String signature, JniSignature source, List<String> exceptions) {
       this.access = access; this.name = name; this.descriptor = descriptor; this.signature = signature;
+      this.exceptions = exceptions;
       this.source = source;
     }
   }

@@ -157,6 +157,11 @@ public class Javah {
     Toolchain toolchain = getToolchain();
     if ("javac".equals(mode) || ("auto".equals(mode) && "javah".equals(name)
         && findTool(toolchain, "javah") == null)) {
+      try {
+        if (!JavacHeaders.hasTargets(getClassDirectory(), getIncludes(), excludes, extraClasses)) { return; }
+      } catch (IOException ex) {
+        throw new MojoExecutionException("Cannot discover JNI header targets", ex);
+      }
       String compiler = findTool(toolchain, "javac");
       if (compiler == null) {
         throw new MojoExecutionException("Cannot find javac in the selected JDK (toolchain or javaHome)");
