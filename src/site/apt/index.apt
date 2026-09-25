@@ -255,9 +255,13 @@ noarch area in the target directory.
  classes or package names. Fully typed constructor calls are preferred. When private
  generic types cannot be named, calls using raw casts are tried before calls requiring
  bare null arguments, avoiding ambiguous overloads when a usable cast is available.
- Null inference remains available for inaccessible constructor bounds. The selected
- javac validates the invocations. If it reports an error at a generated constructor,
- another distinct candidate is tried and all generated units are compiled again.
+ Null inference remains available for inaccessible constructor bounds. Constructor
+ calls are selected from class metadata before compilation, checking applicability,
+ generic bounds and overload specificity. All parameters are supplied, including an
+ array for a varargs parameter, and the call must be applicable without boxing or
+ varargs expansion. Ambiguous calls are rejected during selection; failures identify
+ the competing constructor descriptors. All generated units are then compiled
+ together in one javac invocation. Compiler failures propagate without retrying.
  Enclosing
  interfaces retain interface form. Enclosing records retain their record form
  without reconstructing record components. Overrides needed to resolve conflicting
@@ -284,9 +288,9 @@ noarch area in the target directory.
     Temporary sources, throwaway class files, staged headers, compiler arguments and
  diagnostics are kept in <<<target/nar/javac-headers>>> (relative to the configured
  build directory), in <<<sources>>>, <<<classes>>>, <<<headers>>>, <<<javac.args>>>
- and <<<javac.log>>>. Diagnostics from every compilation attempt are retained in
- <<<javac.log>>>; compiler diagnostics use English so errors can be associated with
- generated constructor declarations. Temporary outputs are cleared between attempts.
+ and <<<javac.log>>>. Diagnostics from the single compilation are retained in
+ <<<javac.log>>> and are not parsed to select constructors. Temporary outputs are
+ cleared before compilation.
  Application class files are not overwritten, and annotation
  processing is disabled. Compilation and verification of every requested header
  finish before publication; unsuccessful generation leaves existing headers intact.

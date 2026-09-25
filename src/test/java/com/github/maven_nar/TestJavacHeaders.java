@@ -59,6 +59,14 @@ public class TestJavacHeaders extends TestCase {
   @Override
   protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
 
+  public void testConstructorWildcardArrayBound() throws Exception {
+    compile(classes, expected,
+        "Base.java", "public class Base { protected <T> Base(java.util.List<? extends T[]> values) {} }",
+        "Api.java", "public class Api extends Base { public Api() { super(null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testMixedNullConstructorAlternative() throws Exception {
     compile(classes, expected,
         "Base.java", "public class Base<T> { private static class A {} private static class B {}"

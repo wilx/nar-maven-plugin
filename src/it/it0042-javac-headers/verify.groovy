@@ -44,7 +44,7 @@ assert !generic.contains('Java_dependency_GenericApi_items')
 // TextList<?> carries CharSequence's bound through Collection; its implementation stays non-native.
 assert !generic.contains('Java_dependency_GenericApi_boundedItems')
 // Both classes are generated together; Bound<Payload> requires Comparable<Payload>.
-// Payload requires retrying an ambiguous null call with the callable null/int constructor.
+// Payload requires selecting the callable null/int constructor before compilation.
 String payload = new File(headers, 'dependency_Payload.h').text
 assert payload.contains('Java_dependency_Payload_call')
 assert !payload.contains('Java_dependency_Payload_compareTo')
@@ -54,3 +54,6 @@ assert !constants.contains('__nar_header')
 assert new File(basedir, 'consumer/target/nar/javac-headers/javac.args').isFile()
 assert !new File(basedir, 'consumer/src/main/java').exists()
 return true
+
+// Constructor selection must not depend on failed compiler attempts.
+assert !new File(basedir, 'consumer/target/nar/javac-headers/javac.log').text.contains('Compilation attempt 2:')
