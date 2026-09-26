@@ -458,6 +458,97 @@ public class TestLinkerReplay {
     return sub;
   }
 
+  @Test
+  public void testPosixReplayTracksAllPathsThroughOrderedSubstitutions() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    for (final String shell : new String[] {"sh", "bash"}) checkPathSubstitutions(shell);
+  }
+
+  @Test
+  public void testBatchReplayTracksAllPathsThroughOrderedSubstitutions() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkPathSubstitutions("bat");
+  }
+
+  private void checkPathSubstitutions(final String shell) throws Exception {
+    for (final String order : new String[] {"direct", "string", "regex", "later"}) {
+      for (final boolean map : new boolean[] {false, true}) {
+        for (final boolean dry : new boolean[] {false, true}) {
+          checkPathSubstitutions(shell, order, map, dry);
+        }
+      }
+    }
+  }
+
+  private void checkPathSubstitutions(final String shell, final String order, final boolean map, final boolean dry)
+      throws Exception {
+    final String id = shell + order + map + dry;
+    final File original = new File(directory, "original " + id);
+    final File working = new File(original, "nested/output");
+    assertTrue(working.mkdirs());
+    final String special = "bat".equals(shell) ? " %PATH%! & ^" : " %! & ' \" $";
+    final File relocated = new File(directory, "relocated " + id + special);
+    final String firstName = "objects/first %!&.map".replace('/', File.separatorChar);
+    final String secondName = "vendor/second.map".replace('/', File.separatorChar);
+    final File first = new File(original, firstName);
+    final File second = new File(original, secondName);
+    assertTrue(first.getParentFile().mkdirs());
+    assertTrue(second.getParentFile().mkdirs());
+    Files.write(first.toPath(), "first".getBytes(StandardCharsets.UTF_8));
+    Files.write(second.toPath(), "second".getBytes(StandardCharsets.UTF_8));
+    final String unchanged = new File(directory, "unchanged.map").getAbsolutePath();
+    final List<String> payload = Arrays.asList(
+        "-Wl,--version-script=" + first + ",--version-script=" + second,
+        "-Wl,-rpath," + first.getParent() + ":" + second.getParent() + File.separator,
+        "--repeat=" + first + "," + first,
+        "--mixed=" + unchanged + "," + second + ",local.map");
+    final List<String[]> history = recordArguments(working, payload, dry, map);
+    assertEquals(!dry, new File(working, "result").isFile());
+    Files.deleteIfExists(new File(working, "result").toPath());
+    Files.deleteIfExists(new File(working, "result.map").toPath());
+
+    final List<Substitution> rules = new ArrayList<>();
+    File root = original;
+    if ("string".equals(order) || "regex".equals(order)) {
+      root = new File(directory, "intermediate " + id);
+      if ("regex".equals(order)) {
+        // Captures and anchors operate on the whole argument before explicit paths are recognized.
+        rules.add(substitution("regex", "^(?<prefix>.*)" + java.util.regex.Pattern.quote(original.toString()) + "(.*)$",
+            "${prefix}" + java.util.regex.Matcher.quoteReplacement(root.toString()) + "$2"));
+        // Replace any earlier occurrences too (the greedy prefix above selects the last one).
+        rules.add(substitution("regex", java.util.regex.Pattern.quote(original.toString()),
+            java.util.regex.Matcher.quoteReplacement(root.toString())));
+      } else rules.add(substitution("string", original.toString(), root.toString()));
+    }
+    // Different rules recognize separate roots; the same root also occurs more than once in an argument.
+    rules.add(substitution("absolutePath", new File(root, "vendor").toString(), "vendor" + File.separator));
+    rules.add(substitution("absolutePath", root.toString(), ""));
+    String expectedFirst = new File(relocated, firstName).toString();
+    if ("later".equals(order)) {
+      expectedFirst = new File(directory, "absolute replacement %!&.map").toString();
+      rules.add(substitution("string", firstName, expectedFirst));
+      rules.add(substitution("string", "--version-script=", "--script="));
+      rules.add(substitution("regex", "(second)(\\.map)", "$1-edited$2"));
+    }
+    final File replay = scriptWithSubstitutions(history, shell, rules);
+    Files.move(original.toPath(), relocated.toPath());
+    assertReplaySucceeds(replay, shell, relocated);
+    final String expectedSecond = new File(relocated, "later".equals(order)
+        ? secondName.replace("second.map", "second-edited.map") : secondName).toString();
+    final String flag = "later".equals(order) ? "--script=" : "--version-script=";
+    final List<String> expected = Arrays.asList(
+        "-Wl," + flag + expectedFirst + "," + flag + expectedSecond,
+        "-Wl,-rpath," + new File(relocated, "objects") + ":" + new File(relocated, "vendor") + File.separator,
+        "--repeat=" + expectedFirst + "," + expectedFirst,
+        "--mixed=" + unchanged + "," + expectedSecond + ",local.map");
+    final File output = new File(relocated, "nested/output/result");
+    assertEquals(encodedArguments(expected), read(output));
+    assertEquals(map, new File(output.getParentFile(), "result.map").isFile());
+    if (map) assertEquals("map", read(new File(output.getParentFile(), "result.map")));
+    assertFalse(new File(relocated, "result").exists());
+    assertNoTemporaryMaps(output.getParentFile());
+  }
+
   private File argumentScript(final List<String[]> history, final String shell, final File working,
       final List<Substitution> rules) throws Exception {
     // Exercise the payload rules without also rewriting the JVM or the test's working directory.
