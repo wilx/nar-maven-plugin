@@ -121,6 +121,7 @@
     <mavenVersion>3.6.3</mavenVersion>
     <mavenResolverVersion>1.4.1</mavenResolverVersion>
     <jnaVersion>5.19.1</jnaVersion>
+    <nar.surefire.version>3.5.6</nar.surefire.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <maven.compiler.release>8</maven.compiler.release>
@@ -218,16 +219,6 @@
       <version>3.3.0</version>
     </dependency>
     <dependency>
-      <groupId>org.apache.maven.surefire</groupId>
-      <artifactId>surefire-api</artifactId>
-      <version>2.6</version>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.maven.surefire</groupId>
-      <artifactId>surefire-booter</artifactId>
-      <version>2.6</version>
-    </dependency>
-    <dependency>
       <groupId>org.codehaus.plexus</groupId>
       <artifactId>plexus-compiler-api</artifactId>
       <version>2.17.1</version>
@@ -294,6 +285,10 @@
   </dependencies>
 
   <build>
+    <resources>
+      <resource><directory>src/main/resources</directory></resource>
+      <resource><directory>src/main/filtered-resources</directory><filtering>true</filtering></resource>
+    </resources>
     <defaultGoal>install</defaultGoal>
     <pluginManagement>
       <plugins>
@@ -325,7 +320,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>3.5.6</version>
+          <version>${nar.surefire.version}</version>
         </plugin>
         <plugin>
           <artifactId>maven-clean-plugin</artifactId>
