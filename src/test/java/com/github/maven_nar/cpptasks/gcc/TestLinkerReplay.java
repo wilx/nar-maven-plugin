@@ -24,6 +24,8 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.net.URLEncoder;
 import java.util.List;
 
 import org.apache.tools.ant.Project;
@@ -215,6 +217,159 @@ public class TestLinkerReplay {
       assertEquals(name, read(new File(directory, name + ".map")));
     }
     assertNoTemporaryMaps(directory);
+  }
+
+
+  @Test
+  public void testPosixReplayResolvesRelocatedPathsFromInvocationDirectory() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    for (final String shell : new String[] {"sh", "bash"}) {
+      for (final String type : new String[] {"absolutePath", "relativePath", "string", "regex"}) {
+        for (final boolean map : new boolean[] {false, true}) {
+          for (final boolean dry : new boolean[] {false, true}) {
+            checkRelocatedPaths(shell, type, map, dry);
+          }
+        }
+      }
+    }
+  }
+
+  @Test
+  public void testBatchReplayResolvesRelocatedPathsFromInvocationDirectory() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    for (final String type : new String[] {"absolutePath", "string"}) {
+      for (final boolean map : new boolean[] {false, true}) {
+        for (final boolean dry : new boolean[] {false, true}) {
+          checkRelocatedPaths("bat", type, map, dry);
+        }
+      }
+    }
+  }
+
+  private void checkRelocatedPaths(final String shell, final String type, final boolean map, final boolean dry)
+      throws Exception {
+    final String id = shell + type + map + dry;
+    final File original = new File(directory, "original " + id);
+    final File working = new File(original, "target/bin");
+    final File objects = new File(original, "target/object dir");
+    assertTrue(working.mkdirs());
+    assertTrue(objects.mkdirs());
+    final File input = new File(objects, "input.o");
+    Files.write(input.toPath(), "object".getBytes(StandardCharsets.UTF_8));
+    Files.write(new File(working, "local.o").toPath(), "local".getBytes(StandardCharsets.UTF_8));
+    final List<String> pre = new ArrayList<>(Arrays.asList("-cp", System.getProperty("java.class.path"),
+        PathProbe.class.getName(), "-L" + objects, "-L", objects.toString(), "-F" + objects, "-F", objects.toString()));
+    if (type.endsWith("Path")) pre.add("--input=" + input);
+    final List<String[]> history = new RecordingMojo().history();
+    final String name = "output %!&.bin";
+    recordProbe(working, name, pre, new String[] {input.toString(), "local.o"}, dry, map, history);
+    assertEquals(!dry, new File(working, name).isFile());
+    Files.deleteIfExists(new File(working, name).toPath());
+    Files.deleteIfExists(new File(working, name + ".map").toPath());
+    assertNoTemporaryMaps(working);
+    final Substitution sub = new Substitution();
+    sub.setType(type);
+    sub.setReplace(type.endsWith("Path") ? original.toString() : original + File.separator);
+    if ("regex".equals(type)) sub.setReplace(java.util.regex.Pattern.quote(sub.getReplace()));
+    final File replay = script(history, shell, sub);
+    // The original tree must be unavailable: otherwise an accidentally retained absolute path could pass.
+    final String special = "bat".equals(shell) ? " %PATH%! & ^" : " %! & ' \" $";
+    final File relocated = new File(directory, "relocated " + id + special);
+    Files.move(original.toPath(), relocated.toPath());
+    assertReplaySucceeds(replay, shell, relocated);
+    final File result = new File(relocated, "target/bin/" + name);
+    assertEquals("linked", read(result));
+    assertEquals(map, new File(result.getParentFile(), name + ".map").isFile());
+    if (map) assertEquals("map", read(new File(result.getParentFile(), name + ".map")));
+    assertFalse("Output belongs in the recorded directory", new File(relocated, name).exists());
+    assertNoTemporaryMaps(result.getParentFile());
+  }
+
+  @Test
+  public void testPosixReplayResolvesRewrittenExecutableAndV1Record() throws Exception {
+    Assume.assumeTrue(new File("/bin/true").isFile());
+    for (final String shell : new String[] {"sh", "bash"}) checkRewrittenExecutable(shell);
+  }
+
+  @Test
+  public void testBatchReplayResolvesRewrittenExecutableAndV1Record() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkRewrittenExecutable("bat");
+  }
+
+  private void checkRewrittenExecutable(final String shell) throws Exception {
+    final boolean batch = "bat".equals(shell);
+    final File original = new File(directory, "executable original " + shell);
+    final File working = new File(original, "nested/output");
+    assertTrue(working.mkdirs());
+    final File executable = new File(original, batch ? "tool.exe" : "tool");
+    Files.copy((batch ? new File(System.getenv("ComSpec")) : new File("/bin/true")).toPath(), executable.toPath());
+    if (!batch) assertTrue(executable.setExecutable(true));
+    final String[] args = batch ? new String[] {executable.toString(), "/d", "/c", "exit", "0"}
+        : new String[] {executable.toString()};
+    final StringBuilder v1 = new StringBuilder("# nar-replay-v1\t").append(URLEncoder.encode(working.toString(), "UTF-8"));
+    for (final String arg : args) v1.append('\t').append(URLEncoder.encode(arg, "UTF-8"));
+    final Substitution sub = new Substitution();
+    sub.setType("absolutePath");
+    sub.setReplace(original.toString());
+    final Script config = new Script();
+    config.setScriptType(shell);
+    config.setSubstitutions(Arrays.asList(sub));
+    final File replay = new File(directory, "executable." + config.getExtension());
+    try (PrintWriter writer = new PrintWriter(replay, "UTF-8")) {
+      new NarPreparePackageMojo().processReplayFile(Arrays.asList(v1.toString(), "readable command"), config, writer);
+    }
+    final File relocated = new File(directory, "executable relocated " + shell + " %PATH%! &");
+    Files.move(original.toPath(), relocated.toPath());
+    assertReplaySucceeds(replay, shell, relocated);
+  }
+
+  private void assertReplaySucceeds(final File replay, final String shell, final File invocation) throws Exception {
+    final String[] command = "bat".equals(shell)
+        ? new String[] {"cmd.exe", "/d", "/c", replay.getAbsolutePath()}
+        : new String[] {"/bin/" + shell, replay.getAbsolutePath()};
+    final File log = new File(directory, "run.log");
+    final int status = new ProcessBuilder(command).directory(invocation).redirectErrorStream(true).redirectOutput(log)
+        .start().waitFor();
+    assertEquals(read(log), 0, status);
+  }
+
+  private void recordProbe(final File working, final String output, final List<String> pre, final String[] inputs,
+      final boolean dry, final boolean map, final List<String[]> history) throws Exception {
+    final GccLinker linker = new GccLinker(new File(System.getProperty("java.home"), "bin/java").getAbsolutePath(),
+        new String[] {".o"}, new String[0], "", "", false, null);
+    linker.setCommands(history);
+    linker.setDryRun(dry);
+    final CCTask task = new CCTask();
+    final Project project = new Project();
+    project.setProperty("nar.os", "Linux");
+    task.setProject(project);
+    task.setDecorateLinkerOptions(false);
+    final CommandLineLinkerConfiguration config = new CommandLineLinkerConfiguration(linker, "replay-test",
+        new String[][] {pre.toArray(new String[pre.size()]), new String[0]}, new ProcessorParam[0], false, map,
+        false, new String[0], null);
+    linker.link(task, new File(working, output), inputs, config);
+  }
+
+  public static class PathProbe {
+    public static void main(final String[] args) throws Exception {
+      final List<String> values = Arrays.asList(args);
+      for (int i = 0; i < args.length; i++) {
+        final String value = args[i];
+        if (value.startsWith("-L") || value.startsWith("-F")) {
+          final String directory = value.length() == 2 ? args[++i] : value.substring(2);
+          if (!new File(directory).isDirectory()) throw new IllegalArgumentException("Missing search directory: " + directory);
+        } else if (value.startsWith("--input=")) {
+          if (!new File(value.substring(8)).isFile()) throw new IllegalArgumentException("Missing explicit path: " + value);
+        }
+      }
+      if (!new File(args[args.length - 2]).isFile()) throw new IllegalArgumentException("Missing input: " + args[args.length - 2]);
+      if (!new File(args[args.length - 1]).isFile()) throw new IllegalArgumentException("Missing relative input");
+      Files.write(new File(args[values.indexOf("-o") + 1]).toPath(), "linked".getBytes(StandardCharsets.UTF_8));
+      for (final String arg : args) {
+        if (arg.startsWith("-Map=")) Files.write(new File(arg.substring(5)).toPath(), "map".getBytes(StandardCharsets.UTF_8));
+      }
+    }
   }
 
   private int execute(final File script, final String shell) throws Exception {
