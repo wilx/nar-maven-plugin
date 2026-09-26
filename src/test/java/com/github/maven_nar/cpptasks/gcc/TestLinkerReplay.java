@@ -402,7 +402,7 @@ public class TestLinkerReplay {
           Files.deleteIfExists(new File(working, "result.map").toPath());
           final String replacement = "two words 'quoted' \"&quoted\" %PATH% !bang! $HOME ; \\\\";
           final Substitution value = substitution("string", "REPLAY_VALUE", replacement);
-          final File replay = scriptWithSubstitutions(history, shell, Arrays.asList(
+          final File replay = argumentScript(history, shell, working, Arrays.asList(
               substitution(type, "regex".equals(type) ? "^-g$" : "-g", ""),
               substitution(type, "regex".equals(type) ? "^-remove$" : "-remove", ""), value));
           assertReplaySucceeds(replay, shell, directory);
@@ -416,7 +416,7 @@ public class TestLinkerReplay {
     }
     // A value temporarily emptied and then restored must survive; only the final value decides removal.
     final List<String[]> history = recordArguments(directory, Arrays.asList("-g", ""), true, false);
-    final File replay = scriptWithSubstitutions(history, shell, Arrays.asList(
+    final File replay = argumentScript(history, shell, directory, Arrays.asList(
         substitution("string", "-g", ""), substitution("regex", "^$", "restored value")));
     assertReplaySucceeds(replay, shell, directory);
     assertEquals(encodedArguments(Arrays.asList("restored value", "restored value")), read(new File(directory, "result")));
@@ -456,6 +456,21 @@ public class TestLinkerReplay {
     sub.setReplace(match);
     sub.setReplaceWith(replacement);
     return sub;
+  }
+
+  private File argumentScript(final List<String[]> history, final String shell, final File working,
+      final List<Substitution> rules) throws Exception {
+    // Exercise the payload rules without also rewriting the JVM or the test's working directory.
+    final String[] paths = {stageArgumentProbe().getAbsolutePath(), history.get(0)[0], working.getAbsolutePath()};
+    final List<Substitution> substitutions = new ArrayList<>();
+    for (int i = 0; i < paths.length; i++) {
+      substitutions.add(substitution("string", paths[i], "REPLAY_LAUNCH_PATH_" + i));
+    }
+    substitutions.addAll(rules);
+    for (int i = paths.length - 1; i >= 0; i--) {
+      substitutions.add(substitution("string", "REPLAY_LAUNCH_PATH_" + i, paths[i]));
+    }
+    return scriptWithSubstitutions(history, shell, substitutions);
   }
 
   private File stageArgumentProbe() throws Exception {
