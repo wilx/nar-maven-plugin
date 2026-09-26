@@ -124,6 +124,14 @@ public abstract class CommandLineLinker extends AbstractLinker {
     // NB: Do nothing by default.
   }
 
+  /**
+   * Map arguments that require the final native output filename. Returned arguments
+   * must already be decorated for the linker driver.
+   */
+  protected String[] getMapFileSwitch(final String outputFile, final boolean map) {
+    return new String[0];
+  }
+
   protected void addStack(final CCTask task, final int stack, final Vector<String> args) {
     // NB: Do nothing by default.
   }
@@ -185,11 +193,12 @@ public abstract class CommandLineLinker extends AbstractLinker {
     final boolean debug = specificDef.getDebug(baseDefs, 0);
 
     final String startupObject = getStartupObject(linkType);
+    final boolean map = specificDef.getMap(defaultProviders, 1);
 
     addImpliedArgs(task, debug, linkType, preargs);
     addIncremental(task, specificDef.getIncremental(defaultProviders, 1), preargs);
     addFixed(task, specificDef.getFixed(defaultProviders, 1), preargs);
-    addMap(task, specificDef.getMap(defaultProviders, 1), preargs);
+    addMap(task, map, preargs);
     addBase(task, specificDef.getBase(defaultProviders, 1), preargs);
     addStack(task, specificDef.getStack(defaultProviders, 1), preargs);
     addEntry(task, specificDef.getEntry(defaultProviders, 1), preargs);
@@ -208,6 +217,10 @@ public abstract class CommandLineLinker extends AbstractLinker {
         buf.append(' ');
         buf.append(argenum.nextElement());
       }
+    }
+    // Keep map generation in the build history even when its arguments depend on the final output name.
+    if (map) {
+      buf.append(" [map]");
     }
     final String configId = buf.toString();
 
@@ -233,7 +246,6 @@ public abstract class CommandLineLinker extends AbstractLinker {
       }
     }
     final boolean rebuild = specificDef.getRebuild(baseDefs, 0);
-    final boolean map = specificDef.getMap(defaultProviders, 1);
     final String toolPath = specificDef.getToolPath();
     
     setCommands(specificDef.getCommands());
@@ -396,7 +408,8 @@ public abstract class CommandLineLinker extends AbstractLinker {
     final String[] preargs = config.getPreArguments();
     final String[] endargs = config.getEndArguments();
     final String outputSwitch[] = getOutputFileSwitch(task, outputFile);
-    int allArgsCount = preargs.length + 1 + outputSwitch.length + sourceFiles.length + endargs.length;
+    final String[] mapSwitch = getMapFileSwitch(outputFile, config.getMap());
+    int allArgsCount = preargs.length + 1 + outputSwitch.length + mapSwitch.length + sourceFiles.length + endargs.length;
     if (this.isLibtool) {
       allArgsCount++;
     }
@@ -413,6 +426,9 @@ public abstract class CommandLineLinker extends AbstractLinker {
     }
 
     for (final String element : outputSwitch) {
+      allArgs[index++] = element;
+    }
+    for (final String element : mapSwitch) {
       allArgs[index++] = element;
     }
     for (final String sourceFile : sourceFiles) {

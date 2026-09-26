@@ -411,6 +411,11 @@ wish to run a GNU configure step but not the full make process.
 
 	Enables the production of a map file. Default is false.
 
+    With GNU ld, the map is written beside the native output, using its complete
+    filename with <<<.map>>> appended. For example, <<<libexample.so>>> produces
+    <<<libexample.so.map>>>. The plugin forwards the option through GCC or G++
+    automatically; enabling <<<decorateLinkerOptions>>> is not required.
+
 ** {linker pushDepsToLowestOrder}
 
 	When true, this property enables linker re-ordering logic such that libraries that 

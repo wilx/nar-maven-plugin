@@ -84,6 +84,8 @@ public class Linker {
 
   /**
    * Enables or disables the production of a map file.
+   * With GNU ld, the map is written beside the native output using its complete
+   * filename with {@code .map} appended, for example {@code libexample.so.map}.
    */
   @Parameter(required = true)
   private boolean map = false;
