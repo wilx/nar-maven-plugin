@@ -1555,6 +1555,9 @@ final class JavacHeaders {
       }
     }
     sourceNames = names(model, false);
+    // Changing lexical scope clears allocator reservations. Retain enclosing
+    // fresh names before allocating this declaration's own type parameters.
+    sourceScope();
     if (genericDeclaration(model)) {
       JniSignature used = sourceSignature(signature(model));
       used.parents.clear();

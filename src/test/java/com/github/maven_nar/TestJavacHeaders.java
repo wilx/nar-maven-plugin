@@ -2995,6 +2995,37 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testRetainedVariablesAcrossThreeEnclosingScopes() throws Exception {
+    compile(classes, expected,
+        "p/Outer.java", "package p; class Hidden<A extends Number, B extends CharSequence, C extends Throwable> {"
+        + " protected Hidden(A a, B b, C c) {} public class Arg {} }"
+        + " public class Outer<X extends Number> { public native X outer(X value);"
+        + " public class Middle<Y extends CharSequence> { public native Y middle(Y value);"
+        + " public class PublicBase<Z extends Throwable> extends Hidden<X, Y, Z> {"
+        + " public PublicBase(X x, Y y, Z z) { super(x, y, z); }"
+        + " public native X outerValue(X value); public native Y middleValue(Y value);"
+        + " public native Z innerValue(Z value); } } }",
+        "q/Api.java", "package q; public abstract class Api implements"
+        + " java.util.function.Supplier<p.Outer<Integer>.Middle<String>.PublicBase<Exception>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedInnerBoundUsesEnclosingVariable() throws Exception {
+    compile(classes, expected,
+        "p/Outer.java", "package p; class Hidden<A extends Number, B extends A> {"
+        + " protected Hidden(A a, B b) {} public class Arg {} }"
+        + " public class Outer<X extends Number> { public native X outer(X value);"
+        + " public class PublicBase<Y extends X> extends Hidden<X, Y> {"
+        + " public PublicBase(X x, Y y) { super(x, y); }"
+        + " public native X outerValue(X value); public native Y innerValue(Y value); } }",
+        "q/Api.java", "package q; public abstract class Api implements"
+        + " java.util.function.Supplier<p.Outer<Number>.PublicBase<Integer>.Arg> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);
