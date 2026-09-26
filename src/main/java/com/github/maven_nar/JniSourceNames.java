@@ -109,6 +109,19 @@ final class JniSourceNames {
       }
       return qualified;
     }
+    List<JniClass> chain = new ArrayList<JniClass>();
+    JniClass model = metadata.resolve(binary);
+    while (true) {
+      chain.add(model);
+      // A public member can be inherited from an inaccessible declaring type.
+      // Prefer its exact lexical binding before spelling that declaring type.
+      // Check the member first, then any usable enclosing-type binding.
+      if (binds(model.simple(), model.name)) {
+        return model.simple() + qualified.substring(metadata.sourceName(model.name).length());
+      }
+      if (model.outer() == null) { break; }
+      model = metadata.resolve(model.outer());
+    }
     String first = qualified.substring(0, dot);
     String packageName = metadata.resolve(root).packageName();
     if (!bindings.containsKey(first) && !imports.containsKey(first)
@@ -119,20 +132,10 @@ final class JniSourceNames {
     // A type named java (or another package prefix) hides qualified names in
     // its scope. Imports are resolved outside that scope. Prefer importing the
     // outermost type so protected member types remain qualified by their owner.
-    List<JniClass> chain = new ArrayList<JniClass>();
-    JniClass model = metadata.resolve(binary);
-    while (true) {
-      chain.add(model);
-      if (model.outer() == null) { break; }
-      model = metadata.resolve(model.outer());
-    }
     Collections.reverse(chain);
     for (JniClass candidate : chain) {
       String canonical = metadata.sourceName(candidate.name);
       String simple = candidate.simple();
-      // A lexical name is usable only when it denotes this exact type. This
-      // includes own members even when an inherited member hides the root name.
-      if (binds(simple, candidate.name)) { return simple + qualified.substring(canonical.length()); }
       // Java forbids imports from the unnamed package, including member types.
       if (candidate.packageName().isEmpty()) { continue; }
       if (bindings.containsKey(simple) || unqualified.contains(simple) || qualifiedPrefixes.contains(simple)) { continue; }

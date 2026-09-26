@@ -258,7 +258,9 @@ noarch area in the target directory.
  conflicts with an import. Types from the default package are never imported.
  Name checks verify the actual class denoted by declared and inherited member
  names, rejecting hidden or ambiguous spellings while retaining valid self and
- member references. Superclass and interface clauses use their declaration scope;
+ member references. Verified lexical bindings take precedence over canonical
+ names, so an inherited public member can be used without naming its inaccessible
+ declaring class. Superclass and interface clauses use their declaration scope;
  member names enter scope in the class body. Unrelated member class files are not
  resolved to perform these checks.
  Generated subclasses follow the throws clause actually emitted for their parent;
