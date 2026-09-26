@@ -3026,6 +3026,165 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testRetainedSiblingScopes() throws Exception {
+    compile(classes, expected, "p/Outer.java",
+        "package p; class Hidden<A,B> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X x);"
+        + " public class Left<Y extends CharSequence> extends Hidden<X,Y> {"
+        + " public native X leftOuter(X x);"
+        + " public native Y left(Y y); } public class Right<Z extends Throwable> extends Hidden<X,Z> {"
+        + " public native X rightOuter(X x);"
+        + " public native Z right(Z z); } }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<java.util.Map<p.Outer<Integer>.Left<String>.Arg,p.Outer<Integer>.Right<Exception>.Arg>> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedStaticScope() throws Exception {
+    compile(classes, expected, "p/Outer.java",
+        "package p; class Hidden<A> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X x); public static class PublicBase<Y extends CharSequence> extends Hidden<Y> {"
+        + " public native Y value(Y y); } }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.Outer.PublicBase<String>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedRecursiveAndDependentBounds() throws Exception {
+    compile(classes, expected, "p/Outer.java",
+        "package p; class Hidden<A extends Number,B extends CharSequence & Comparable<B>,C extends A> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X x);"
+        + " public class PublicBase<Y extends CharSequence & Comparable<Y>, Z extends X> extends Hidden<X,Y,Z> {"
+        + " public native X outerValue(X x);"
+        + " public native Y text(Y y);"
+        + " public native Z number(Z z);"
+        + " public native <W extends Z> W dependent(W w); } }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Number>.PublicBase<String,Integer>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedOriginalAllocatorNames() throws Exception {
+    compile(classes, expected, "p/Outer.java",
+        "package p; class Hidden<A,B> { public class Arg {} }"
+        + " public class Outer<_NarType0 extends Number> {"
+        + " public native _NarType0 outer(_NarType0 x);"
+        + " public class PublicBase<_NarType1 extends CharSequence> extends Hidden<_NarType0,_NarType1> {"
+        + " public native _NarType0 outerValue(_NarType0 x);"
+        + " public native _NarType1 value(_NarType1 y); } }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.PublicBase<String>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedMethodShadowAndRestore() throws Exception {
+    compile(classes, expected, "p/Outer.java",
+        "package p; class Hidden<A,B> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X x);"
+        + " public class PublicBase<Y extends CharSequence> extends Hidden<X,Y> {"
+        + " public native <X extends Throwable> X raise(X x) throws X;"
+        + " public native X after(X x);"
+        + " public native <Y extends Number> Y number(Y y);"
+        + " public native Y text(Y y); } }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.PublicBase<String>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedIntermediateShadow() throws Exception {
+    compile(classes, expected, "p/Outer.java",
+        "package p; class Hidden<A,B> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X x);"
+        + " public class Middle<X extends CharSequence> {"
+        + " public native X middle(X x);"
+        + " public class PublicBase<Y extends Throwable> extends Hidden<X,Y> {"
+        + " public native X middleValue(X x);"
+        + " public native Y value(Y y); } } }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.Middle<String>.PublicBase<Exception>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedConstructorAndClassNames() throws Exception {
+    compile(classes, expected, "p/Outer.java",
+        "package p; class Hidden<A,B> { protected <T extends B> Hidden(A a,T b) {} public class Arg {} }"
+        + " public class Outer<_NarConstructor0 extends Number> {"
+        + " public native _NarConstructor0 outer(_NarConstructor0 x);"
+        + " public class PublicBase<_NarMethod0 extends CharSequence> extends Hidden<_NarConstructor0,_NarMethod0> { public PublicBase(_NarConstructor0 a,_NarMethod0 b) { super(a,b); } public native _NarConstructor0 outerValue(_NarConstructor0 a);"
+        + " public native _NarMethod0 innerValue(_NarMethod0 b); } }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.PublicBase<String>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedOwnerAndInnerArrays() throws Exception {
+    compile(classes, expected, "p/Outer.java",
+        "package p; class Hidden<A,B> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X[] outer(X[] x);"
+        + " public class PublicBase<Y extends CharSequence> extends Hidden<X,Y> {"
+        + " public native X[][] outerValue(X[][] x);"
+        + " public native Y[] innerValue(Y[] y);"
+        + " public native java.util.List<X> list(java.util.List<Y> y); } }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.PublicBase<String>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedClassParameterCapturedByConstructorAlias() throws Exception {
+    compile(classes, expected, "p/PublicBase.java",
+        "package p; class Hidden<A> { protected <T extends CharSequence> Hidden(A a,T b) {} public class Arg {} }"
+        + " public class PublicBase<_NarConstructor0 extends Number> extends Hidden<_NarConstructor0> { public PublicBase(_NarConstructor0 a) { super(a,\"\"); } public native _NarConstructor0 value(_NarConstructor0 a); }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.PublicBase<Integer>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedClassParameterWithDistinctConstructorNamesControl() throws Exception {
+    compile(classes, expected, "p/PublicBase.java",
+        "package p; class Hidden<A> { protected <T extends CharSequence> Hidden(A a,T b) {} public class Arg {} }"
+        + " public class PublicBase<X extends Number> extends Hidden<X> { public PublicBase(X a) { super(a,\"\"); } public native X value(X a); }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.PublicBase<Integer>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedClassParameterMatchesConstructorFormal() throws Exception {
+    compile(classes, expected, "p/PublicBase.java",
+        "package p; class Hidden<A> { protected <T extends CharSequence> Hidden(A a,T b) {} public class Arg {} }"
+        + " public class PublicBase<T extends Number> extends Hidden<T> { public PublicBase(T a) { super(a,\"\"); } public native T value(T a); }",
+        "q/Api.java",
+        "package q; public abstract class Api implements java.util.function.Supplier<p.PublicBase<Integer>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);
