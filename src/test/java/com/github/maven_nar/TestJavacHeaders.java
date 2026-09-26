@@ -2927,6 +2927,74 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testRetainedOuterVariablesKeepDistinctBounds() throws Exception {
+    compile(classes, expected, "p/Outer.java", "package p; class Hidden<A, B> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X value);"
+        + " public class PublicBase<Y extends CharSequence> extends Hidden<X,Y> {"
+        + " public native X outerValue(X value);"
+        + " public native Y innerValue(Y value); } }",
+        "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.PublicBase<String>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedOuterVariablesSatisfySuperclassBounds() throws Exception {
+    compile(classes, expected, "p/Outer.java", "package p; class Hidden<A extends Number, B extends CharSequence> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X value);"
+        + " public class PublicBase<Y extends CharSequence> extends Hidden<X,Y> {"
+        + " public native Y innerValue(Y value); } }",
+        "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.PublicBase<String>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedOuterVariableWithoutInnerFormalsControl() throws Exception {
+    compile(classes, expected, "p/Outer.java", "package p; class Hidden<A> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X value);"
+        + " public class PublicBase extends Hidden<X> {"
+        + " public native X value(X value); } }",
+        "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.PublicBase.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedInnerVariableShadowsOuterControl() throws Exception {
+    compile(classes, expected, "p/Outer.java", "package p; class Hidden<A> { public class Arg {} }"
+        + " public class Outer<X extends Number> {"
+        + " public native X outer(X value);"
+        + " public class PublicBase<X extends CharSequence> extends Hidden<X> {"
+        + " public native X value(X value); } }",
+        "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.Outer<Integer>.PublicBase<String>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testDependentWildcardWithObjectControl() throws Exception {
+    compile(classes, expected, "p/PublicBase.java", "package p; class Hidden<A,B> { public class Arg {} }"
+        + " public class PublicBase<X,Y extends X> extends Hidden<X,Y> {}",
+        "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.PublicBase<Object,? extends Number>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedNativeMethodWithIndependentFormalsControl() throws Exception {
+    compile(classes, expected, "p/PublicBase.java", "package p; class Hidden<A> { public class Arg {} }"
+        + " public class PublicBase<X extends Number> extends Hidden<X> {"
+        + " public native <Y extends CharSequence> X value(X a,Y b); }",
+        "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.PublicBase<Integer>.Arg> {"
+        + " public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);
