@@ -20,6 +20,7 @@
 package com.github.maven_nar.cpptasks.gcc;
 
 import java.io.File;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -440,8 +441,8 @@ public class TestLinkerReplay {
 
   private List<String[]> recordArguments(final File working, final List<String> payload, final boolean dry,
       final boolean map) throws Exception {
-    final List<String> pre = new ArrayList<>(Arrays.asList("-cp", System.getProperty("java.class.path"),
-        ArgumentProbe.class.getName()));
+    final List<String> pre = new ArrayList<>(Arrays.asList("-cp", stageArgumentProbe().getAbsolutePath(),
+        ReplayArgumentProbe.class.getName()));
     pre.addAll(payload);
     pre.add("END_ARGUMENTS");
     final List<String[]> history = new RecordingMojo().history();
@@ -457,21 +458,22 @@ public class TestLinkerReplay {
     return sub;
   }
 
-  private static String encodedArguments(final List<String> values) throws Exception {
-    final StringBuilder result = new StringBuilder();
-    for (final String value : values) result.append(URLEncoder.encode(value, "UTF-8")).append('\n');
-    return result.toString();
-  }
-
-  public static class ArgumentProbe {
-    public static void main(final String[] args) throws Exception {
-      final List<String> values = Arrays.asList(args);
-      Files.write(new File(args[values.indexOf("-o") + 1]).toPath(),
-          encodedArguments(values.subList(0, values.indexOf("END_ARGUMENTS"))).getBytes(StandardCharsets.UTF_8));
-      for (final String arg : args) {
-        if (arg.startsWith("-Map=")) Files.write(new File(arg.substring(5)).toPath(), "map".getBytes(StandardCharsets.UTF_8));
+  private File stageArgumentProbe() throws Exception {
+    // String substitutions must not accidentally rewrite the JVM's own launch paths.
+    final File classes = new File(directory, "launcher-g-remove/classes");
+    final String resource = ReplayArgumentProbe.class.getName().replace('.', '/') + ".class";
+    final File target = new File(classes, resource);
+    if (!target.isFile()) {
+      assertTrue(target.getParentFile().mkdirs());
+      try (InputStream input = ReplayArgumentProbe.class.getResourceAsStream("/" + resource)) {
+        Files.copy(input, target.toPath());
       }
     }
+    return classes;
+  }
+
+  private static String encodedArguments(final List<String> values) throws Exception {
+    return ReplayArgumentProbe.encodedArguments(values);
   }
 
   private int execute(final File script, final String shell) throws Exception {
