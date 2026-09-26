@@ -2122,6 +2122,115 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testMemberShadowsDefaultPackageConstructorArgument() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+      "Base.java", "public class Base { protected Base(Arg value) {} }",
+      "Api.java", "public class Api extends Base { public static class Arg {} public Api(){super(null);} public native void call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testMemberShadowsDefaultPackageConstructorException() throws Exception {
+    compile(classes, expected, "Problem.java", "public class Problem extends Exception {}",
+      "Base.java", "public class Base { protected Base() throws Problem {} }",
+      "Api.java", "public class Api extends Base { public static class Problem {} public Api() throws Exception {} public native void call(Problem value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testInheritedMemberShadowsDefaultPackageConstructorArgument() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+      "Types.java", "public interface Types { class Arg {} }",
+      "Base.java", "public class Base { protected Base(Arg value) {} }",
+      "Api.java", "public class Api extends Base implements Types { public Api(){super(null);} public native void call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testSecondDescendantRejectsFirstParentChoice() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}", "Throwable.java", "public class Throwable {}",
+      "Base.java", "import java.lang.Exception; public class Base { protected Base() throws Exception {} protected Base(int value) {} }",
+      "Parent.java", "public class Parent extends Base { public Parent(){super(0);} public native void parent(); }",
+      "A.java", "public class A extends Parent { public native void a(); }",
+      "java.java", "public class java extends Parent { public native void call(Exception e, Throwable t); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testSiblingConstructorsShareSourceNames() throws Exception {
+    compile(classes, expected, "p/Problem.java", "package p; public class Problem extends Exception {}",
+      "q/Problem.java", "package q; public class Problem extends Exception {}",
+      "BaseP.java", "public class BaseP { protected BaseP() throws p.Problem {} }",
+      "BaseQ.java", "public class BaseQ { protected BaseQ() throws q.Problem {} }",
+      "Owner.java", "public class Owner { public static class p {} public static class q {} public static class A extends BaseP { public A() throws Exception {} public native void a(p v); } public static class B extends BaseQ { public B() throws Exception {} public native void b(q v); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testSelfNamedConstructorArgumentControl() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { protected Base(Api value) {} }",
+      "Api.java", "public class Api extends Base { public Api(){super(null);} public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testOwnNestedExceptionControl() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { protected Base() throws Api.Problem {} }",
+      "Api.java", "public class Api extends Base { public static class Problem extends Exception {} public Api() throws Problem {} public native void call(Problem p); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testInheritedMemberHidesCurrentClassConstructorArgument() throws Exception {
+    compile(classes, expected, "Types.java", "public interface Types { class Api {} }",
+        "Base.java", "public class Base { protected Base(Api value) {} }",
+        "Api.java", "public class Api extends Base implements Types { public Api(){super(null);} public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testOwnNestedExceptionWithHiddenEnclosingName() throws Exception {
+    compile(classes, expected, "Types.java", "public interface Types { class Api {} }",
+        "Base.java", "public class Base { protected Base() throws Api.Problem {} }",
+        "Api.java", "public class Api extends Base implements Types { public static class Problem extends Exception {}"
+        + " public Api() throws Problem {} public native void call(Problem p); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testSuperclassArgumentUsesHeaderScope() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+        "Base.java", "public class Base<T> { protected Base(T value) {} }",
+        "Api.java", "public class Api extends Base<Arg> { public static class Arg {}"
+        + " public Api(){super(null);} public native void call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testAmbiguousInheritedMembersHideDefaultPackageArgument() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+        "Left.java", "public interface Left { class Arg {} }",
+        "Right.java", "public interface Right { class Arg {} }",
+        "Base.java", "public class Base { protected Base(Arg value) {} }",
+        "Api.java", "public class Api extends Base implements Left, Right {"
+        + " public Api(){super(null);} public native void call(Left.Arg left, Right.Arg right); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testLexicalBindingsDoNotResolveUnrelatedMembers() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+        "Types.java", "public interface Types { class Arg {} class Unrelated {} }",
+        "Base.java", "public class Base { protected Base(Arg value) {} }",
+        "Api.java", "public class Api extends Base implements Types { public Api(){super(null);} public native void call(Arg value); }");
+    Files.delete(new File(classes, "Types$Unrelated.class").toPath());
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testGeneratedSuperclassMemberHidesDefaultPackageArgument() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+        "Base.java", "public class Base { protected Base(Arg value) {} public native void base(); }",
+        "Parent.java", "public class Parent extends Base { public static class Arg {} public Parent(){super(null);}"
+        + " public native void parent(Arg value); }",
+        "Api.java", "public class Api extends Parent { public native void call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);
