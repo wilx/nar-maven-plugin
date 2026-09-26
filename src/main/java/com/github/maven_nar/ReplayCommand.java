@@ -91,20 +91,29 @@ public final class ReplayCommand {
     }
     final String cwd = substitute(this.directory, script);
     final String[] args = new String[this.arguments.length];
-    for (int i = 0; i < args.length; i++) args[i] = substitute(this.arguments[i], script);
-    final String line = command(args, batch);
+    final StringBuilder command = new StringBuilder();
+    boolean needsBase = false;
+    for (int i = 0; i < args.length; i++) {
+      args[i] = substitute(this.arguments[i], script);
+      final Argument argument = new Argument(this.arguments[i], args[i], script);
+      if (i != 0) command.append(' ');
+      command.append(argument.render(batch, i == 0));
+      needsBase |= argument.fromInvocationDirectory;
+    }
+    final String line = command.toString();
     final String temporary = this.temporaryMap.isEmpty() ? null : substitute(this.temporaryMap, script);
     final String destination = this.finalMap.isEmpty() ? null : substitute(this.finalMap, script);
     if (batch) {
-      writeBatch(script, writer, cwd, line, temporary, destination);
+      writeBatch(script, writer, cwd, line, command(args, true), temporary, destination, needsBase);
     } else {
-      writePosix(script, writer, cwd, line, temporary, destination);
+      writePosix(script, writer, cwd, line, temporary, destination, needsBase);
     }
   }
 
   private static void writePosix(final Script script, final PrintWriter writer, final String cwd, final String line,
-      final String temporary, final String destination) {
+      final String temporary, final String destination, final boolean needsBase) {
     writer.println("(");
+    if (needsBase) writer.println("_nar_replay_base=$(pwd -P) || exit $?");
     writer.println("cd " + quote(cwd, false) + " || exit $?");
     final String temp = temporary == null ? null : quote("./" + temporary, false);
     if (temp != null) {
@@ -126,8 +135,9 @@ public final class ReplayCommand {
   }
 
   private static void writeBatch(final Script script, final PrintWriter writer, final String cwd, final String line,
-      final String temporary, final String destination) {
+      final String display, final String temporary, final String destination, final boolean needsBase) {
     writer.println("setlocal DisableDelayedExpansion");
+    if (needsBase) writer.println("set \"_nar_replay_base=%CD%\"");
     writer.println("pushd " + batchPath(cwd));
     writer.println("if errorlevel 1 exit /b 1");
     final String temp = temporary == null ? null : batchPath(".\\" + temporary);
@@ -135,7 +145,7 @@ public final class ReplayCommand {
       writer.println("if exist " + temp + " del /f /q " + temp);
       writer.println("if exist " + temp + " (popd & exit /b 1)");
     }
-    if (script.isEchoLines()) writer.println("echo " + echoBatch(line));
+    if (script.isEchoLines()) writer.println("echo " + echoBatch(display));
     writer.println(line);
     writer.println("set \"_nar_replay_status=%errorlevel%\"");
     if (temp != null) {
@@ -152,6 +162,63 @@ public final class ReplayCommand {
     writer.println("popd");
     writer.println("if not \"%_nar_replay_status%\"==\"0\" exit /b %_nar_replay_status%");
     writer.println("endlocal");
+  }
+
+  /** A substituted value with an optional runtime directory reference, never shell text supplied by the user. */
+  private static final class Argument {
+    private final String value;
+    private final String prefix;
+    private final boolean fromInvocationDirectory;
+
+    Argument(final String original, final String value, final Script script) {
+      this.value = value;
+      final int pathStart = pathStart(original, script);
+      this.prefix = pathStart < 0 ? "" : substitute(original.substring(0, pathStart), script);
+      this.fromInvocationDirectory = pathStart >= 0 && value.startsWith(this.prefix)
+          && !isAbsolute(value.substring(this.prefix.length()));
+    }
+
+    String render(final boolean batch, final boolean executable) throws MojoExecutionException {
+      if (!this.fromInvocationDirectory) return batch && executable ? batchPath(this.value) : quote(this.value, batch);
+      final String relative = this.value.substring(this.prefix.length());
+      if (!batch) return quote(this.prefix, false) + "\"$_nar_replay_base\"" + quote("/" + relative, false);
+      // Windows filenames cannot contain quotes. Ordinary quote mode protects metacharacters in the
+      // runtime directory; caret-escaped quote mode would expose an expanded '&' to cmd.exe.
+      if (this.value.indexOf('"') >= 0) throw new MojoExecutionException("Invalid quote in replay path: " + this.value);
+      final StringBuilder result = new StringBuilder("\"").append(this.prefix.replace("%", "%%"))
+          .append("%_nar_replay_base%\\").append(relative.replace("%", "%%"));
+      // Escape trailing backslashes for the Windows argument parser before closing the quote.
+      for (int i = relative.length() - 1; i >= 0 && relative.charAt(i) == '\\'; i--) result.append('\\');
+      if (relative.isEmpty()) result.append('\\');
+      return result.append('"').toString();
+    }
+  }
+
+  private static boolean isAbsolute(final String value) {
+    // Records can be rendered on a different platform; do not use the host's File.isAbsolute().
+    return value.startsWith("/") || value.startsWith("\\")
+        || value.length() >= 3 && Character.isLetter(value.charAt(0)) && value.charAt(1) == ':'
+            && (value.charAt(2) == '/' || value.charAt(2) == '\\');
+  }
+
+  private static int pathStart(final String value, final Script script) {
+    if (isAbsolute(value)) return 0;
+    if ((value.startsWith("-L") || value.startsWith("-F")) && isAbsolute(value.substring(2))) return 2;
+    // Explicit path substitutions also identify paths embedded in other options (e.g. --script=/path).
+    if (script.getSubstitutions() != null) {
+      for (final Substitution sub : script.getSubstitutions()) {
+        if (sub.getReplace() == null) continue;
+        final String root;
+        if ("absolutePath".equals(sub.getType())) root = new File(sub.getReplace()).getAbsolutePath() + File.separator;
+        else if ("relativePath".equals(sub.getType())) root = new File(sub.getReplace()).getPath() + File.separator;
+        else continue;
+        if (isAbsolute(root)) {
+          final int index = value.indexOf(root);
+          if (index >= 0) return index;
+        }
+      }
+    }
+    return -1;
   }
 
   private static String substitute(final String value, final Script script) {

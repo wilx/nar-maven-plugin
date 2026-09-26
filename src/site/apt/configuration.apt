@@ -638,7 +638,12 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         GCC, Clang, and direct ld replay entries retain their argument boundaries and
         working directories. Generated sh, bash, and bat scripts quote literal arguments
         for their respective shells. Substitutions on these entries apply to arguments
-        and working directories before quoting. Existing plain-text replay logs remain supported.
+        and working directories before quoting. When a substitution changes an absolute
+        filesystem path to a relative path, replay resolves it from the invocation directory,
+        before entering the recorded linker directory. This includes executable and input paths,
+        <<<-L>>>/<<<-F>>> search paths, and paths identified by explicit path substitutions.
+        Originally relative paths remain relative to the recorded linker directory.
+        Existing plain-text replay logs remain supported.
 
         When linker maps are enabled, replay scripts check that linking produced a nonempty
         map and move it beside the native output with <<<.map>>> appended. Failed links

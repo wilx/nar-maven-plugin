@@ -38,8 +38,22 @@
           <skipTests>true</skipTests>
           <replay>
             <scripts>
-              <script><id>relink-sh</id><scriptType>sh</scriptType><compile>false</compile></script>
-              <script><id>relink-bash</id><scriptType>bash</scriptType><compile>false</compile></script>
+              <script>
+                <id>relink-sh</id>
+                <scriptType>sh</scriptType>
+                <compile>false</compile>
+                <substitutions>
+                  <substitution><type>absolutePath</type><replace>${project.basedir}</replace></substitution>
+                </substitutions>
+              </script>
+              <script>
+                <id>relink-bash</id>
+                <scriptType>bash</scriptType>
+                <compile>false</compile>
+                <substitutions>
+                  <substitution><type>absolutePath</type><replace>${project.basedir}</replace></substitution>
+                </substitutions>
+              </script>
             </scripts>
           </replay>
         </configuration>
