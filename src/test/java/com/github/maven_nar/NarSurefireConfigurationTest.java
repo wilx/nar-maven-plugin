@@ -47,6 +47,13 @@ public class NarSurefireConfigurationTest {
     assertForks("never", null, null, false, true, "1", "true");
   }
 
+  @Test
+  public void zeroCoreMultiplierStillForksForSelectedToolchain() throws Exception {
+    assertForks("once", "0C", true, false, true, "1", "true");
+    assertForks("once", "0.0C", true, false, true, "1", "true");
+    assertForks("once", "00", true, false, true, "1", "true");
+  }
+
   @Test(expected = MojoFailureException.class)
   public void invalidLegacyModeIsRejected() throws Exception {
     new NarSurefireConfiguration().forks("typo", null, null, false, false);

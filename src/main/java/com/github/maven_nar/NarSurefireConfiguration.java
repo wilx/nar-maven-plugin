@@ -98,7 +98,7 @@ final class NarSurefireConfiguration {
     if (reuse != null) {
       effectiveReuse = reuse;
     }
-    if (toolchain && "0".equals(effectiveCount.trim())) {
+    if (toolchain && isZero(effectiveCount)) {
       effectiveCount = "1";
     }
     if (nativeTests) {
@@ -106,6 +106,18 @@ final class NarSurefireConfiguration {
       effectiveReuse = false;
     }
     value("forkCount", effectiveCount).value("reuseForks", effectiveReuse);
+  }
+
+  private static boolean isZero(String count) {
+    String trimmed = count.trim();
+    try {
+      return trimmed.endsWith("C")
+          ? Double.parseDouble(trimmed.substring(0, trimmed.length() - 1)) == 0d
+          : Integer.parseInt(trimmed) == 0;
+    } catch (NumberFormatException e) {
+      // Let Surefire report invalid modern fork counts using its own validation.
+      return false;
+    }
   }
 
   Xpp3Dom toDom() {
