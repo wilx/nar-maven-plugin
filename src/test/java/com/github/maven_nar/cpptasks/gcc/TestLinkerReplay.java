@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.net.URLEncoder;
 import java.util.List;
 
+import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.tools.ant.Project;
 import org.junit.Assume;
 
@@ -372,6 +373,104 @@ public class TestLinkerReplay {
     }
   }
 
+  @Test
+  public void testPosixReplayRemovesOnlyExplicitlyEmptiedArguments() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    for (final String shell : new String[] {"sh", "bash"}) checkRemovedArguments(shell);
+  }
+
+  @Test
+  public void testBatchReplayRemovesOnlyExplicitlyEmptiedArguments() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkRemovedArguments("bat");
+  }
+
+  private void checkRemovedArguments(final String shell) throws Exception {
+    for (final String type : new String[] {"string", "regex"}) {
+      for (final boolean map : new boolean[] {false, true}) {
+        for (final boolean dry : new boolean[] {false, true}) {
+          final File working = new File(directory, shell + type + map + dry + "/nested/output");
+          assertTrue(working.mkdirs());
+          final List<String> payload = Arrays.asList("-g", "", " \t ", "REPLAY_VALUE", "-remove", "-g");
+          final List<String[]> history = recordArguments(working, payload, dry, map);
+          assertEquals(!dry, new File(working, "result").isFile());
+          Files.deleteIfExists(new File(working, "result").toPath());
+          Files.deleteIfExists(new File(working, "result.map").toPath());
+          final String replacement = "two words 'quoted' \"&quoted\" %PATH% !bang! $HOME ; \\\\";
+          final Substitution value = substitution("string", "REPLAY_VALUE", replacement);
+          final File replay = scriptWithSubstitutions(history, shell, Arrays.asList(
+              substitution(type, "regex".equals(type) ? "^-g$" : "-g", ""),
+              substitution(type, "regex".equals(type) ? "^-remove$" : "-remove", ""), value));
+          assertReplaySucceeds(replay, shell, directory);
+          // Exact argv comparison catches unwanted empty tokens, trimming, splitting and shell expansion.
+          assertEquals(encodedArguments(Arrays.asList("", " \t ", replacement)), read(new File(working, "result")));
+          assertEquals(map, new File(working, "result.map").isFile());
+          if (map) assertEquals("map", read(new File(working, "result.map")));
+          assertNoTemporaryMaps(working);
+        }
+      }
+    }
+    // A value temporarily emptied and then restored must survive; only the final value decides removal.
+    final List<String[]> history = recordArguments(directory, Arrays.asList("-g", ""), true, false);
+    final File replay = scriptWithSubstitutions(history, shell, Arrays.asList(
+        substitution("string", "-g", ""), substitution("regex", "^$", "restored value")));
+    assertReplaySucceeds(replay, shell, directory);
+    assertEquals(encodedArguments(Arrays.asList("restored value", "restored value")), read(new File(directory, "result")));
+  }
+
+  @Test
+  public void testReplayRejectsRemovalOfExecutable() throws Exception {
+    final List<String[]> history = recordArguments(directory, Arrays.asList("value"), true, false);
+    for (final String shell : new String[] {"sh", "bash", "bat"}) {
+      for (final String type : new String[] {"string", "regex"}) {
+        final String executable = history.get(0)[0];
+        final String match = "regex".equals(type) ? "^" + java.util.regex.Pattern.quote(executable) + "$" : executable;
+        try {
+          scriptWithSubstitutions(history, shell, Arrays.asList(substitution(type, match, "")));
+          fail("Removing the executable must fail during script generation");
+        } catch (final MojoExecutionException expected) {
+          assertTrue(expected.getMessage(), expected.getMessage().contains("executable"));
+        }
+      }
+    }
+  }
+
+  private List<String[]> recordArguments(final File working, final List<String> payload, final boolean dry,
+      final boolean map) throws Exception {
+    final List<String> pre = new ArrayList<>(Arrays.asList("-cp", System.getProperty("java.class.path"),
+        ArgumentProbe.class.getName()));
+    pre.addAll(payload);
+    pre.add("END_ARGUMENTS");
+    final List<String[]> history = new RecordingMojo().history();
+    recordProbe(working, "result", pre, new String[0], dry, map, history);
+    return history;
+  }
+
+  private static Substitution substitution(final String type, final String match, final String replacement) {
+    final Substitution sub = new Substitution();
+    sub.setType(type);
+    sub.setReplace(match);
+    sub.setReplaceWith(replacement);
+    return sub;
+  }
+
+  private static String encodedArguments(final List<String> values) throws Exception {
+    final StringBuilder result = new StringBuilder();
+    for (final String value : values) result.append(URLEncoder.encode(value, "UTF-8")).append('\n');
+    return result.toString();
+  }
+
+  public static class ArgumentProbe {
+    public static void main(final String[] args) throws Exception {
+      final List<String> values = Arrays.asList(args);
+      Files.write(new File(args[values.indexOf("-o") + 1]).toPath(),
+          encodedArguments(values.subList(0, values.indexOf("END_ARGUMENTS"))).getBytes(StandardCharsets.UTF_8));
+      for (final String arg : args) {
+        if (arg.startsWith("-Map=")) Files.write(new File(arg.substring(5)).toPath(), "map".getBytes(StandardCharsets.UTF_8));
+      }
+    }
+  }
+
   private int execute(final File script, final String shell) throws Exception {
     return new ProcessBuilder("/bin/" + shell, script.getAbsolutePath()).directory(directory)
         .redirectErrorStream(true).redirectOutput(new File(directory, "run.log")).start().waitFor();
@@ -407,11 +506,16 @@ public class TestLinkerReplay {
   }
 
   private File script(final List<String[]> commands, final String shell, final Substitution sub) throws Exception {
+    return scriptWithSubstitutions(commands, shell, sub == null ? null : Arrays.asList(sub));
+  }
+
+  private File scriptWithSubstitutions(final List<String[]> commands, final String shell, final List<Substitution> substitutions)
+      throws Exception {
     final File log = new File(directory, "link-commands");
     NarUtil.writeCommandFile(log, commands);
     final Script script = new Script();
     script.setScriptType(shell);
-    if (sub != null) script.setSubstitutions(Arrays.asList(sub));
+    script.setSubstitutions(substitutions);
     final File output = new File(directory, "replay." + script.getExtension());
     try (PrintWriter writer = new PrintWriter(output, "UTF-8")) {
       new NarPreparePackageMojo().processReplayFile(Files.readAllLines(log.toPath(), StandardCharsets.UTF_8), script, writer);
