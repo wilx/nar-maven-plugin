@@ -29,6 +29,8 @@ import java.util.*;
 import org.apache.tools.ant.BuildException;
 import org.apache.tools.ant.types.Environment;
 
+import com.github.maven_nar.ReplayCommand;
+import com.github.maven_nar.ReplayCommandList;
 import com.github.maven_nar.cpptasks.CCTask;
 import com.github.maven_nar.cpptasks.CUtil;
 import com.github.maven_nar.cpptasks.LinkerDef;
@@ -392,6 +394,7 @@ public abstract class CommandLineLinker extends AbstractLinker {
         execArgs = prepareResponseFile(outputFile, execArgs);
       }
 
+      recordCommand(parentDir, execArgs);
       final int retval = runCommand(task, parentDir, execArgs);
       if (retval != 0) {
         throw new BuildException(getCommandWithPath(config) + " failed with return code " + retval, task.getLocation());
@@ -536,9 +539,21 @@ public abstract class CommandLineLinker extends AbstractLinker {
    * compiler
    */
   protected int runCommand(final CCTask task, final File workingDir, final String[] cmdline) throws BuildException {
-    commands.add(cmdline);
     if (dryRun) return 0;
     return CUtil.runCommand(task, workingDir, cmdline, this.newEnvironment, this.env);
+  }
+
+  /** True when this adapter supplies literal arguments without embedded shell quoting. */
+  protected boolean hasRawReplayArguments() {
+    return false;
+  }
+
+  private void recordCommand(final File workingDir, final String[] arguments) {
+    if (this.commands instanceof ReplayCommandList && hasRawReplayArguments()) {
+      ((ReplayCommandList) this.commands).add(arguments, new ReplayCommand(workingDir, arguments));
+    } else if (this.commands != null) {
+      this.commands.add(arguments);
+    }
   }
 
   protected final void setCommand(final String command) {

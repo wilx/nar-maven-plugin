@@ -66,6 +66,16 @@ public abstract class GccCompatibleLinker extends AbstractLdLinker {
   }
 
   @Override
+  protected boolean hasRawReplayArguments() {
+    return true;
+  }
+
+  @Override
+  protected String quoteFilename(final StringBuffer buf, final String filename) {
+    return filename;
+  }
+
+  @Override
   public String[] getOutputFileSwitch(final String outputFile) {
     // ProcessBuilder receives individual arguments; response-file quoting is handled separately.
     return new String[] {"-o", outputFile.replace('\\', '/')};

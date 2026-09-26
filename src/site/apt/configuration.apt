@@ -635,6 +635,11 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         Instructs NAR to record the commands issued for compilation and linking to a file, for later use. This is
         useful if builds need to be done outside of Maven and NAR itself.
 
+        GCC, Clang, and direct ld replay entries retain their argument boundaries and
+        working directories. Generated sh, bash, and bat scripts quote literal arguments
+        for their respective shells. Substitutions on these entries apply to arguments
+        and working directories before quoting. Existing plain-text replay logs remain supported.
+
 ** {outputDirectory}
 
         Directory where replay logs should be recorded to. Defaults to ${project.build.directory}/nar/nar-replay
