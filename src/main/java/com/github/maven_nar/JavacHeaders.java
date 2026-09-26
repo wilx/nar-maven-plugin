@@ -805,39 +805,76 @@ final class JavacHeaders {
     return false;
   }
 
-  private JniSourceNames names(JniClass model) throws IOException {
+  private JniSourceNames names(JniClass model) throws IOException { return names(model, true); }
+
+  private JniSourceNames names(JniClass model, boolean body) throws IOException {
     JniClass root = root(model);
     JniSourceNames names = sourceUnits.get(root.name);
     if (names == null) {
       names = new JniSourceNames(metadata, root.name);
       sourceUnits.put(root.name, names);
     }
-    Set<String> shadowed = new HashSet<String>();
-    for (JniClass scope = model; scope != null;
+    Map<String, Set<String>> bindings = new HashMap<String, Set<String>>();
+    Map<String, Map<String, JniClass.Member>> members = new HashMap<String, Map<String, JniClass.Member>>();
+    if (!body) { bindings.put(model.simple(), Collections.singleton(model.name)); }
+    // Members are in scope in the body, not the superclass/interface clauses
+    // (JLS 6.3). An inner declaration's header still sees its enclosing body.
+    for (JniClass scope = body ? model : model.outer() == null ? null : metadata.resolve(model.outer()); scope != null;
         scope = scope.outer() == null ? null : metadata.resolve(scope.outer())) {
-      shadowed.add(scope.simple());
-      for (JniClass declaration : declarations.values()) {
-        if (scope.name.equals(declaration.outer())) { shadowed.add(declaration.simple()); }
+      Map<String, Set<String>> local = new HashMap<String, Set<String>>();
+      for (Map.Entry<String, JniClass.Member> entry : memberTypes(scope, members, new HashSet<String>()).entrySet()) {
+        String simple = entry.getValue().simple;
+        if (!local.containsKey(simple)) { local.put(simple, new TreeSet<String>()); }
+        local.get(simple).add(entry.getKey());
       }
-      inheritedTypeNames(scope, model.packageName(), shadowed, new HashSet<String>());
+      // A declared/inherited member hides the enclosing class's own simple
+      // name too. Multiple inherited declarations remain ambiguous; diamond
+      // paths to the same binary class do not introduce ambiguity.
+      if (!local.containsKey(scope.simple())) { local.put(scope.simple(), Collections.singleton(scope.name)); }
+      for (Map.Entry<String, Set<String>> entry : local.entrySet()) {
+        if (!bindings.containsKey(entry.getKey())) { bindings.put(entry.getKey(), entry.getValue()); }
+      }
     }
-    names.scope(shadowed);
+    names.scope(bindings);
     return names;
   }
 
-  private void inheritedTypeNames(JniClass model, String packageName, Set<String> names, Set<String> visited)
-      throws IOException {
-    if (!visited.add(model.name)) { return; }
-    if (!declarations.containsKey(model.name)) {
-      for (JniClass.Member member : model.members.values()) {
-        if (model.name.equals(member.outer) && member.simple != null
-            && (member.access & Opcodes.ACC_PRIVATE) == 0
-            && ((member.access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED)) != 0
-                || model.packageName().equals(packageName))) { names.add(member.simple); }
+  private Map<String, JniClass.Member> memberTypes(JniClass model, Map<String, Map<String, JniClass.Member>> cache,
+      Set<String> visiting) throws IOException {
+    if (cache.containsKey(model.name)) { return cache.get(model.name); }
+    if (!visiting.add(model.name)) { throw new IOException("Inheritance cycle involving " + model.name); }
+    Map<String, JniClass.Member> result = new TreeMap<String, JniClass.Member>();
+    if (declarations.containsKey(model.name)) {
+      // Omitted class-file members cannot hide names in a reconstructed type.
+      for (JniClass declaration : declarations.values()) {
+        if (model.name.equals(declaration.outer())) { result.put(declaration.name, declaration.nesting); }
+      }
+    } else {
+      for (Map.Entry<String, JniClass.Member> entry : model.members.entrySet()) {
+        if (model.name.equals(entry.getValue().outer) && entry.getValue().simple != null) {
+          result.put(entry.getKey(), entry.getValue());
+        }
       }
     }
-    if (model.parent != null) { inheritedTypeNames(metadata.resolve(model.parent), packageName, names, visited); }
-    for (String parent : model.interfaces) { inheritedTypeNames(metadata.resolve(parent), packageName, names, visited); }
+    Set<String> declared = new HashSet<String>();
+    for (JniClass.Member member : result.values()) { declared.add(member.simple); }
+    List<String> parents = new ArrayList<String>(model.interfaces);
+    if (model.parent != null) { parents.add(model.parent); }
+    for (String parent : parents) {
+      for (Map.Entry<String, JniClass.Member> entry : memberTypes(metadata.resolve(parent), cache, visiting).entrySet()) {
+        JniClass.Member member = entry.getValue();
+        int slash = entry.getKey().lastIndexOf('/');
+        String packageName = slash < 0 ? "" : entry.getKey().substring(0, slash);
+        if (!declared.contains(member.simple) && (member.access & Opcodes.ACC_PRIVATE) == 0
+            && ((member.access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED)) != 0
+                || model.packageName().equals(packageName))) { result.put(entry.getKey(), member); }
+      }
+    }
+    visiting.remove(model.name);
+    cache.put(model.name, result);
+    // InnerClasses already supplies names and access flags. Do not resolve the
+    // member class files: unrelated members may deliberately be absent.
+    return result;
   }
 
   private String source(JniSignature.Value value) throws IOException {
@@ -1245,9 +1282,11 @@ final class JavacHeaders {
   }
 
   private void emit(JniClass model, StringBuilder out, String indent) throws IOException {
-    sourceNames = names(model);
-    sourceVariables = model.isInterface() ? sourceNames.variables(signature(model), "_NarType")
+    // Type variables are used in the body too: their fresh names must avoid
+    // member names, even though declaration clauses have a narrower scope.
+    sourceVariables = model.isInterface() ? names(model).variables(signature(model), "_NarType")
         : Collections.<String, String>emptyMap();
+    sourceNames = names(model, false);
     out.append(indent).append(access(model.nesting == null ? model.access : model.nesting.access));
     if (model.outer() != null && (model.nesting.access & Opcodes.ACC_STATIC) != 0) { out.append("static "); }
     if (!model.isEnum() && !model.isRecord() && hasSealedParent(model)) { out.append("non-sealed "); }
@@ -1270,6 +1309,7 @@ final class JavacHeaders {
           .append(source(interfaces.get(i)));
     }
     out.append(" {\n");
+    sourceNames = names(model);
     if (model.isEnum()) { out.append(indent).append("  ;\n"); }
     for (JniClass.Field field : model.constants) {
       out.append(indent).append("  ").append(access(field.access)).append("static final ")

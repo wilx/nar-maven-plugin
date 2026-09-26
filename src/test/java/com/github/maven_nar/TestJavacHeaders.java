@@ -250,7 +250,7 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
-  public void testNativeBindingMismatchDoesNotPublishHeaders() throws Exception {
+  public void testNativeBindingMismatchIsRejectedBeforeCompilation() throws Exception {
     compile(classes, expected,
         "Shadow.java", "public class Shadow {}",
         "Api.java", "public class Api { public native Shadow call();"
@@ -272,9 +272,21 @@ public class TestJavacHeaders extends TestCase {
     for (String name : expected.list()) {
       Files.copy(new File(expected, name).toPath(), new File(actual, name).toPath());
     }
-    failure("Native method ABI changed", Collections.<String>emptySet());
-    assertTrue("The guard checks successful compilation", new File(work, "generated/classes/Api.class").isFile());
+    failure("lexical name Shadow binds to [Api$Shadow]", Collections.<String>emptySet());
+    assertFalse("Reject the incorrect binding before javac", new File(work, "generated/classes/Api.class").isFile());
     equalHeaders(); // Both previously published headers must remain intact.
+  }
+
+  public void testNativeAbiGuardRejectsDescriptorChange() throws Exception {
+    compile(classes, null, "Api.java", "public class Api { public native Object call(); }");
+    JniClass original = new JniClass();
+    new org.objectweb.asm.ClassReader(Files.readAllBytes(new File(classes, "Api.class").toPath())).accept(original, 0);
+    File generated = directory("changed");
+    compile(generated, null, "Api.java", "public class Api { public native String call(); }");
+    try {
+      JavacHeaders.verifyNativeMethods(original, new File(generated, "Api.class"));
+      fail("A changed native descriptor must not be published");
+    } catch (IOException ex) { assertTrue(ex.getMessage(), ex.getMessage().contains("Native method ABI changed")); }
   }
 
   public void testNativeAbiGuardRejectsStaticChange() throws Exception {
@@ -1089,6 +1101,17 @@ public class TestJavacHeaders extends TestCase {
         + " public enum Api implements Contract<String> { VALUE { public " + method + " { return null; } };"
         + " public native void call(); } }");
     Files.delete(new File(classes, "Missing.class").toPath());
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInterfaceTypeVariableAvoidsMemberNameInBody() throws Exception {
+    compile(classes, expected,
+        "Left.java", "public interface Left<T> { default T get() { return null; } }",
+        "Right.java", "public interface Right<T> { T get(); }",
+        "Container.java", "public interface Container<T> extends Left<T>, Right<T> { T get();"
+        + " class _NarType0 {} class Api implements Container<String> { public String get() { return null; }"
+        + " public native void call(_NarType0 value); } }");
     generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
     equalHeaders();
   }

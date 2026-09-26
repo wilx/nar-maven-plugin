@@ -34,7 +34,7 @@ import java.util.TreeSet;
 final class JniSourceNames {
   private final JniClassPath metadata;
   private final String root;
-  private Set<String> shadowed;
+  private Map<String, Set<String>> bindings;
   private boolean collecting = true;
   private final Set<String> unnamedTypes = new HashSet<String>();
   private final Set<String> unqualified = new HashSet<String>();
@@ -48,7 +48,7 @@ final class JniSourceNames {
 
   JniSourceNames copy() {
     JniSourceNames result = new JniSourceNames(metadata, root);
-    result.shadowed = shadowed;
+    result.bindings = bindings;
     result.collecting = collecting;
     result.unnamedTypes.addAll(unnamedTypes);
     result.unqualified.addAll(unqualified);
@@ -58,7 +58,7 @@ final class JniSourceNames {
   }
 
   void use(JniSourceNames source) {
-    shadowed = source.shadowed;
+    bindings = source.bindings;
     collecting = source.collecting;
     unnamedTypes.clear(); unnamedTypes.addAll(source.unnamedTypes);
     unqualified.clear(); unqualified.addAll(source.unqualified);
@@ -79,7 +79,12 @@ final class JniSourceNames {
     }
   }
 
-  void scope(Set<String> shadowed) { this.shadowed = shadowed; }
+  void scope(Map<String, Set<String>> bindings) { this.bindings = bindings; }
+
+  private boolean binds(String simple, String binary) {
+    Set<String> visible = bindings.get(simple);
+    return visible != null && visible.size() == 1 && visible.contains(binary);
+  }
 
   void finishCollecting() { collecting = false; }
 
@@ -97,10 +102,16 @@ final class JniSourceNames {
       // introducing any imports, even imports used by synthetic constructors.
       return qualified;
     }
-    if (dot < 0) { return qualified; }
+    if (dot < 0) {
+      if (bindings.containsKey(qualified) && !binds(qualified, binary)) {
+        throw new IOException("Cannot express type " + binary + ": lexical name " + qualified
+            + " binds to " + bindings.get(qualified) + " in " + root);
+      }
+      return qualified;
+    }
     String first = qualified.substring(0, dot);
     String packageName = metadata.resolve(root).packageName();
-    if (!shadowed.contains(first) && !imports.containsKey(first)
+    if (!bindings.containsKey(first) && !imports.containsKey(first)
         && (unnamedTypes.contains(binary) || !metadata.hasPackageType(packageName, first))) {
       qualifiedPrefixes.add(first);
       return qualified;
@@ -119,10 +130,12 @@ final class JniSourceNames {
     for (JniClass candidate : chain) {
       String canonical = metadata.sourceName(candidate.name);
       String simple = candidate.simple();
-      if (candidate.name.equals(root)) { return simple + qualified.substring(canonical.length()); }
+      // A lexical name is usable only when it denotes this exact type. This
+      // includes own members even when an inherited member hides the root name.
+      if (binds(simple, candidate.name)) { return simple + qualified.substring(canonical.length()); }
       // Java forbids imports from the unnamed package, including member types.
       if (candidate.packageName().isEmpty()) { continue; }
-      if (shadowed.contains(simple) || unqualified.contains(simple) || qualifiedPrefixes.contains(simple)) { continue; }
+      if (bindings.containsKey(simple) || unqualified.contains(simple) || qualifiedPrefixes.contains(simple)) { continue; }
       String existing = imports.get(simple);
       if (existing != null && !existing.equals(canonical)) { continue; }
       imports.put(simple, canonical);
@@ -136,7 +149,7 @@ final class JniSourceNames {
   }
 
   Map<String, String> variables(JniSignature signature, String prefix, List<String> additionalTypes) throws IOException {
-    Set<String> reserved = new HashSet<String>(shadowed);
+    Set<String> reserved = new HashSet<String>(bindings.keySet());
     reserved.addAll(imports.keySet());
     reserved.addAll(signature.bounds.keySet());
     Set<String> types = new HashSet<String>(additionalTypes);

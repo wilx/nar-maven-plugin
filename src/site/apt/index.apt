@@ -256,6 +256,11 @@ noarch area in the target directory.
  clause. Dependent bounds retain checked coverage needed by older compilers. Inaccessible or shadowed checked exception
  names use the nearest usable superclass, including when a default-package name
  conflicts with an import. Types from the default package are never imported.
+ Name checks verify the actual class denoted by declared and inherited member
+ names, rejecting hidden or ambiguous spellings while retaining valid self and
+ member references. Superclass and interface clauses use their declaration scope;
+ member names enter scope in the class body. Unrelated member class files are not
+ resolved to perform these checks.
  Generated subclasses follow the throws clause actually emitted for their parent;
  a parent constructor choice is retained only if its generated descendants can
  express the resulting clauses. Rejected choices discard descendant imports and
