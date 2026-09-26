@@ -34,7 +34,14 @@ import java.util.TreeSet;
 final class JniSourceNames {
   private final JniClassPath metadata;
   private final String root;
+  interface Access {
+    boolean visible(String name) throws IOException;
+    Set<String> qualifiers(String member, boolean discover) throws IOException;
+  }
+
   private Map<String, Set<String>> bindings;
+  private Access access;
+  private final Set<String> references = new HashSet<String>();
   private boolean collecting = true;
   private final Set<String> unnamedTypes = new HashSet<String>();
   private final Set<String> unqualified = new HashSet<String>();
@@ -49,6 +56,8 @@ final class JniSourceNames {
   JniSourceNames copy() {
     JniSourceNames result = new JniSourceNames(metadata, root);
     result.bindings = bindings;
+    result.access = access;
+    result.references.addAll(references);
     result.collecting = collecting;
     result.unnamedTypes.addAll(unnamedTypes);
     result.unqualified.addAll(unqualified);
@@ -59,6 +68,8 @@ final class JniSourceNames {
 
   void use(JniSourceNames source) {
     bindings = source.bindings;
+    access = source.access;
+    references.clear(); references.addAll(source.references);
     collecting = source.collecting;
     unnamedTypes.clear(); unnamedTypes.addAll(source.unnamedTypes);
     unqualified.clear(); unqualified.addAll(source.unqualified);
@@ -79,7 +90,12 @@ final class JniSourceNames {
     }
   }
 
-  void scope(Map<String, Set<String>> bindings) { this.bindings = bindings; }
+  void scope(Map<String, Set<String>> bindings, Access access) {
+    this.bindings = bindings;
+    this.access = access;
+  }
+
+  Set<String> references() { return new HashSet<String>(references); }
 
   private boolean binds(String simple, String binary) {
     Set<String> visible = bindings.get(simple);
@@ -90,61 +106,91 @@ final class JniSourceNames {
 
   Set<String> imports() { return new TreeSet<String>(imports.values()); }
 
-  String name(String binary) throws IOException {
+  String name(String binary) throws IOException { return name(binary, new HashSet<String>()); }
+
+  private String name(String binary, Set<String> visiting) throws IOException {
+    if (!visiting.add(binary)) { throw new IOException("Cyclic source qualification for " + binary); }
+    try { return spelling(binary, visiting); }
+    finally { visiting.remove(binary); }
+  }
+
+  private String spelling(String binary, Set<String> visiting) throws IOException {
     String qualified = metadata.sourceName(binary);
     int dot = qualified.indexOf('.');
-    // Every spelling must preserve its binding, including exceptions discovered
-    // after mandatory imports and members of a default-package enclosing type.
+    // Reserve unnamed-package roots before choosing imports for any declaration.
     reserve(Collections.singleton(binary));
-    if (collecting) {
-      // A default-package root (including Owner.Member references) has no
-      // alternative qualified spelling. Reserve it across the whole unit before
-      // introducing any imports, even imports used by synthetic constructors.
-      return qualified;
-    }
+    if (collecting) { return qualified; }
     if (dot < 0) {
       if (bindings.containsKey(qualified) && !binds(qualified, binary)) {
         throw new IOException("Cannot express type " + binary + ": lexical name " + qualified
             + " binds to " + bindings.get(qualified) + " in " + root);
       }
+      if (!access.visible(binary)) { throw new IOException("Inaccessible source type " + binary + " in " + root); }
       return qualified;
     }
     List<JniClass> chain = new ArrayList<JniClass>();
     JniClass model = metadata.resolve(binary);
+    boolean visible = true;
     while (true) {
       chain.add(model);
-      // A public member can be inherited from an inaccessible declaring type.
-      // Prefer its exact lexical binding before spelling that declaring type.
-      // Check the member first, then any usable enclosing-type binding.
-      if (binds(model.simple(), model.name)) {
+      // Inheritance may expose a member without exposing its declaring type.
+      if (visible && binds(model.simple(), model.name)) {
         return model.simple() + qualified.substring(metadata.sourceName(model.name).length());
       }
+      visible &= access.visible(model.name);
       if (model.outer() == null) { break; }
       model = metadata.resolve(model.outer());
     }
     String first = qualified.substring(0, dot);
     String packageName = metadata.resolve(root).packageName();
-    if (!bindings.containsKey(first) && !imports.containsKey(first)
+    if (visible && !bindings.containsKey(first) && !imports.containsKey(first)
         && (unnamedTypes.contains(binary) || !metadata.hasPackageType(packageName, first))) {
       qualifiedPrefixes.add(first);
       return qualified;
     }
-    // A type named java (or another package prefix) hides qualified names in
-    // its scope. Imports are resolved outside that scope. Prefer importing the
-    // outermost type so protected member types remain qualified by their owner.
-    Collections.reverse(chain);
-    for (JniClass candidate : chain) {
-      String canonical = metadata.sourceName(candidate.name);
-      String simple = candidate.simple();
-      // Java forbids imports from the unnamed package, including member types.
-      if (candidate.packageName().isEmpty()) { continue; }
-      if (bindings.containsKey(simple) || unqualified.contains(simple) || qualifiedPrefixes.contains(simple)) { continue; }
-      String existing = imports.get(simple);
-      if (existing != null && !existing.equals(canonical)) { continue; }
-      imports.put(simple, canonical);
-      return simple + qualified.substring(canonical.length());
+    if (visible) {
+      // Imports are resolved outside the lexical scope. Prefer the outermost
+      // import, which also keeps protected members qualified by their owner.
+      List<JniClass> importChain = new ArrayList<JniClass>(chain);
+      Collections.reverse(importChain);
+      boolean importable = true;
+      for (JniClass candidate : importChain) {
+        int flags = candidate.nesting == null ? candidate.access : candidate.nesting.access;
+        importable &= (flags & org.objectweb.asm.Opcodes.ACC_PUBLIC) != 0
+            || ((flags & org.objectweb.asm.Opcodes.ACC_PRIVATE) == 0 && packageName.equals(candidate.packageName()));
+        if (!importable || candidate.packageName().isEmpty()) { continue; }
+        String canonical = metadata.sourceName(candidate.name);
+        String simple = candidate.simple();
+        if (bindings.containsKey(simple) || unqualified.contains(simple) || qualifiedPrefixes.contains(simple)) { continue; }
+        String existing = imports.get(simple);
+        if (existing != null && !existing.equals(canonical)) { continue; }
+        imports.put(simple, canonical);
+        return simple + qualified.substring(canonical.length());
+      }
     }
-    throw new IOException("Cannot express type " + binary + " without source-name shadowing in " + root);
+    // A source qualifier need not be the declaring class. Check the member's
+    // identity through candidate subtypes; shadowing or ambiguous inheritance
+    // must never silently change the native descriptor. Search cached metadata
+    // first, and discover classpath hierarchy headers only if that is insufficient.
+    for (boolean discover : new boolean[] {false, true}) {
+      for (JniClass member : chain) {
+        if (!access.visible(member.name)) { break; }
+        if (member.outer() == null) { continue; }
+        for (String qualifier : access.qualifiers(member.name, discover)) {
+          JniSourceNames trial = copy();
+          try {
+            String prefix = trial.name(qualifier, visiting);
+            trial.references.add(qualifier);
+            use(trial);
+            return prefix + "." + member.simple()
+                + qualified.substring(metadata.sourceName(member.name).length());
+          } catch (IOException unusable) {
+            // Imports and references belong only to the successful spelling.
+          }
+        }
+      }
+    }
+    throw new IOException("Cannot express type " + binary + " without inaccessible qualifiers or source-name shadowing in " + root);
   }
 
   Map<String, String> variables(JniSignature signature, String prefix) throws IOException {

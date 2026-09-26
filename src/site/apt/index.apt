@@ -260,7 +260,14 @@ noarch area in the target directory.
  names, rejecting hidden or ambiguous spellings while retaining valid self and
  member references. Verified lexical bindings take precedence over canonical
  names, so an inherited public member can be used without naming its inaccessible
- declaring class. Superclass and interface clauses use their declaration scope;
+ declaring class. When a lexical name is hidden or unavailable, the generator
+ looks for an accessible subtype qualifier whose member resolves to the same
+ binary class. Constructor arguments and checked exceptions use these same
+ spelling rules. Qualifier discovery first uses known metadata; if necessary,
+ it indexes superclass/interface names from classpath files, respecting classpath
+ precedence, manifest entries and the compiler's multi-release JAR view. This
+ fallback does not resolve unrelated method or field types. Superclass and
+ interface clauses use their declaration scope;
  member names enter scope in the class body. Unrelated member class files are not
  resolved to perform these checks.
  Generated subclasses follow the throws clause actually emitted for their parent;

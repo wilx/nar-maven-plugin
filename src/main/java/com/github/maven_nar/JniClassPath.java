@@ -36,12 +36,15 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -55,6 +58,7 @@ final class JniClassPath implements Closeable {
   private final Map<String, JniClass> classes = new HashMap<String, JniClass>();
   private final Map<String, String> sourceNames = new HashMap<String, String>();
   private final Map<String, Boolean> packageTypes = new HashMap<String, Boolean>();
+  private Map<String, List<String>> hierarchyHeaders;
   private final int release;
   private final File javaHome;
   private FileSystem runtimeImage;
@@ -176,39 +180,145 @@ final class JniClassPath implements Closeable {
         }
         // Manifest entries immediately follow their containing JAR, including
         // transitive entries. Share visited paths across the complete search.
-        if (attributes != null) {
-          String classPath = attributes.getMainAttributes().getValue("Class-Path");
-          if (classPath != null) {
-            List<File> dependencies = new ArrayList<File>();
-            StringTokenizer tokens = new StringTokenizer(classPath);
-            while (tokens.hasMoreTokens()) {
-              String token = tokens.nextToken();
-              // JDK 8-10 javac treats manifest entries as file names, not URLs.
-              if (release < 11) {
-                File entry = new File(token);
-                dependencies.add(release == 8 || !entry.isAbsolute() ? new File(path.getParentFile(), token) : entry);
-                continue;
-              }
-              try {
-                URL url = new URL(path.toURI().toURL(), token);
-                URI entry = url.toURI();
-                // javac's file classpath supports local JARs and directories.
-                // Never fetch remote URLs while reading application metadata.
-                if (!entry.isOpaque() && "file".equalsIgnoreCase(entry.getScheme()) && entry.getAuthority() == null
-                    && entry.getQuery() == null && entry.getFragment() == null) {
-                  dependencies.add(new File(entry));
-                }
-              } catch (MalformedURLException | URISyntaxException ex) {
-                // Invalid manifest URLs are ignored, as in the JDK's classpath.
-              }
-            }
-            JniClass found = find(dependencies, name, false, visited);
-            if (found != null) { return found; }
-          }
-        }
+        JniClass found = find(manifestPaths(path, attributes), name, false, visited);
+        if (found != null) { return found; }
       }
     }
     return null;
+  }
+
+  private List<File> manifestPaths(File path, Manifest attributes) throws IOException {
+    List<File> dependencies = new ArrayList<File>();
+    String classPath = attributes == null ? null : attributes.getMainAttributes().getValue("Class-Path");
+    if (classPath == null) { return dependencies; }
+    StringTokenizer tokens = new StringTokenizer(classPath);
+    while (tokens.hasMoreTokens()) {
+      String token = tokens.nextToken();
+      // JDK 8-10 javac treats manifest entries as file names, not URLs.
+      if (release < 11) {
+        File entry = new File(token);
+        dependencies.add(release == 8 || !entry.isAbsolute() ? new File(path.getParentFile(), token) : entry);
+        continue;
+      }
+      try {
+        URI entry = new URL(path.toURI().toURL(), token).toURI();
+        if (!entry.isOpaque() && "file".equalsIgnoreCase(entry.getScheme()) && entry.getAuthority() == null
+            && entry.getQuery() == null && entry.getFragment() == null) { dependencies.add(new File(entry)); }
+      } catch (MalformedURLException | URISyntaxException ex) {
+        // Invalid or remote manifest URLs are not application metadata sources.
+      }
+    }
+    return dependencies;
+  }
+
+  /** Candidate qualifiers only: full member/access checks are done by the caller. */
+  Set<String> subtypes(String name, boolean discover) throws IOException {
+    if (discover && hierarchyHeaders == null) {
+      hierarchyHeaders = new HashMap<String, List<String>>();
+      indexHierarchy(entries, new HashSet<File>());
+    }
+    Map<String, List<String>> headers = new HashMap<String, List<String>>();
+    if (hierarchyHeaders != null) { headers.putAll(hierarchyHeaders); }
+    // Project definitions and normally resolved classes retain lookup precedence.
+    for (JniClass model : classes.values()) {
+      List<String> parents = new ArrayList<String>(model.interfaces);
+      if (model.parent != null) { parents.add(model.parent); }
+      headers.put(model.name, parents);
+    }
+    Map<String, Set<String>> children = new HashMap<String, Set<String>>();
+    for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+      for (String parent : entry.getValue()) {
+        if (!children.containsKey(parent)) { children.put(parent, new TreeSet<String>()); }
+        children.get(parent).add(entry.getKey());
+      }
+    }
+    Set<String> result = new TreeSet<String>();
+    List<String> pending = new ArrayList<String>();
+    pending.add(name);
+    for (int i = 0; i < pending.size(); i++) {
+      Set<String> found = children.get(pending.get(i));
+      if (found == null) { continue; }
+      for (String child : found) { if (!child.equals(name) && result.add(child)) { pending.add(child); } }
+    }
+    return result;
+  }
+
+  private void indexHierarchy(List<File> paths, Set<File> visited) throws IOException {
+    for (File path : paths) {
+      if (!visited.add(path.getCanonicalFile())) { continue; }
+      if (path.isDirectory()) {
+        indexDirectory(path, path, new HashSet<File>());
+      } else if (path.isFile()) {
+        Manifest manifest = null;
+        try (ZipFile zip = new ZipFile(path)) {
+          ZipEntry attributes = zip.getEntry("META-INF/MANIFEST.MF");
+          if (attributes != null) { try (InputStream in = zip.getInputStream(attributes)) { manifest = new Manifest(in); } }
+          boolean multiRelease = release >= 9 && manifest != null
+              && "true".equalsIgnoreCase(manifest.getMainAttributes().getValue("Multi-Release"));
+          Map<String, ZipEntry> selected = new TreeMap<String, ZipEntry>();
+          Map<String, Integer> versions = new HashMap<String, Integer>();
+          for (Enumeration<? extends ZipEntry> all = zip.entries(); all.hasMoreElements();) {
+            ZipEntry entry = all.nextElement();
+            String resource = entry.getName();
+            int version = 0;
+            if (path.getName().endsWith(".jmod") && resource.startsWith("classes/")) { resource = resource.substring(8); }
+            if (resource.startsWith("META-INF/versions/")) {
+              if (!multiRelease) { continue; }
+              int slash = resource.indexOf('/', 18);
+              if (slash < 0) { continue; }
+              try { version = Integer.parseInt(resource.substring(18, slash)); }
+              catch (NumberFormatException invalid) { continue; }
+              if (version < 9 || version > release) { continue; }
+              resource = resource.substring(slash + 1);
+            }
+            if (!resource.endsWith(".class") || resource.startsWith("META-INF/")) { continue; }
+            String name = resource.substring(0, resource.length() - 6);
+            if (!versions.containsKey(name) || versions.get(name) < version) {
+              versions.put(name, version); selected.put(name, entry);
+            }
+          }
+          for (Map.Entry<String, ZipEntry> entry : selected.entrySet()) {
+            if (hierarchyHeaders.containsKey(entry.getKey())) { continue; }
+            try (InputStream in = zip.getInputStream(entry.getValue())) { indexHeader(entry.getKey(), in); }
+          }
+        }
+        indexHierarchy(manifestPaths(path, manifest), visited);
+      }
+    }
+  }
+
+  private void indexDirectory(File root, File directory, Set<File> visiting) throws IOException {
+    File canonical = directory.getCanonicalFile();
+    if (!visiting.add(canonical)) { return; }
+    try {
+      File[] files = directory.listFiles();
+      if (files == null) { return; }
+      Arrays.sort(files);
+      for (File file : files) {
+        if (file.isDirectory()) { indexDirectory(root, file, visiting); }
+        else if (file.getName().endsWith(".class")) {
+          String resource = root.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/');
+          String name = resource.substring(0, resource.length() - 6);
+          if (hierarchyHeaders.containsKey(name)) { continue; }
+          try (InputStream in = Files.newInputStream(file.toPath())) { indexHeader(name, in); }
+        }
+      }
+    } finally { visiting.remove(canonical); }
+  }
+
+  private void indexHeader(String name, InputStream in) throws IOException {
+    // This fallback reads only hierarchy headers. It does not resolve methods,
+    // fields, generic signatures, or any dependencies of unrelated classes.
+    List<String> parents = new ArrayList<String>();
+    hierarchyHeaders.put(name, parents);
+    try {
+      ClassReader reader = new ClassReader(in);
+      if (!name.equals(reader.getClassName())) { return; }
+      if (reader.getSuperName() != null) { parents.add(reader.getSuperName()); }
+      Collections.addAll(parents, reader.getInterfaces());
+    } catch (IllegalArgumentException invalid) {
+      // Unrelated unsupported class versions are not required declarations.
+    }
   }
 
   private JniClass read(InputStream in, boolean platformClass) throws IOException {

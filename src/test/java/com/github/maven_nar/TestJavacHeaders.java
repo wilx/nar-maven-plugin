@@ -377,6 +377,104 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testQualifierFromDependencyDirectoryIgnoresUnrelatedTypes() throws Exception {
+    File dependency = directory("dependency");
+    compile(dependency, null,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase extends HiddenBase {}",
+        "Missing.java", "class Missing {}",
+        "Unrelated.java", "class Unrelated extends Missing { Missing value; Missing call() { return null; } }");
+    Files.delete(new File(dependency, "Missing.class").toPath());
+    compileWithPath(classes, expected, Arrays.asList(dependency),
+        "q/Api.java", "package q; public class Api { public native p.PublicBase.Arg call(p.PublicBase.Arg value); }");
+    generate(classes, Arrays.asList(classes, dependency), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testQualifierFromDependencyJarOutsideDeclaringPackage() throws Exception {
+    File dependency = directory("dependency");
+    compile(dependency, null,
+        "p/Container.java", "package p; public class Container { protected static class HiddenBase { public static class Arg {} } }",
+        "q/PublicBase.java", "package q; public class PublicBase extends p.Container { public static class Exposed extends HiddenBase {} }");
+    File jar = jar(dependency, null, false);
+    compileWithPath(classes, expected, Arrays.asList(jar),
+        "r/Api.java", "package r; public class Api { public native q.PublicBase.Exposed.Arg call(q.PublicBase.Exposed.Arg value); }");
+    generate(classes, Arrays.asList(classes, jar), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testQualifierFromManifestDependency() throws Exception {
+    File dependency = directory("dependency");
+    compile(dependency, null,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase extends HiddenBase {}");
+    jar("dependency.jar", dependency, "library.jar");
+    File library = jar("library.jar", directory("empty"), "dependency.jar");
+    compileWithPath(classes, expected, Arrays.asList(library),
+        "q/Api.java", "package q; public class Api { public native p.PublicBase.Arg call(p.PublicBase.Arg value); }");
+    generate(classes, Arrays.asList(classes, library), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testQualifierFromMultiReleaseJar() throws Exception {
+    File base = directory("base");
+    File versioned = directory("versioned");
+    String hidden = "package p; class HiddenBase { public static class Arg {} }";
+    compile(base, null,
+        "p/PublicBase.java", hidden + " public class PublicBase extends HiddenBase {}",
+        "p/Visible.java", "package p; public class Visible {}");
+    compile(versioned, null,
+        "p/PublicBase.java", hidden + " public class PublicBase {}",
+        "p/Visible.java", "package p; public class Visible extends HiddenBase {}");
+    File jar = jar(base, versioned, true);
+    String qualifier = System.getProperty("java.specification.version").startsWith("1.") ? "PublicBase" : "Visible";
+    compileWithPath(classes, expected, Arrays.asList(jar),
+        "q/Api.java", "package q; public class Api { public native p." + qualifier + ".Arg call(); }");
+    generate(classes, Arrays.asList(classes, jar), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testQualifierRejectsShadowedAndAmbiguousMembers() throws Exception {
+    File dependency = directory("dependency");
+    compile(dependency, null,
+        "p/ZPublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class ZPublicBase extends HiddenBase {}",
+        "p/Other.java", "package p; public interface Other { class Arg {} }",
+        "p/AAmbiguous.java", "package p; public class AAmbiguous extends HiddenBase implements Other {}",
+        "p/BShadow.java", "package p; public class BShadow extends HiddenBase { public static class Arg {} }");
+    File jar = jar(dependency, null, false);
+    compileWithPath(classes, expected, Arrays.asList(jar),
+        "q/Api.java", "package q; public class Api { public native p.ZPublicBase.Arg call(); }");
+    generate(classes, Arrays.asList(classes, jar), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedQualifierWithShadowedPackagePrefix() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase extends HiddenBase {}",
+        "q/Api.java", "package q; import p.PublicBase; public class Api { public static class p {}"
+        + " public native p local(); public native PublicBase.Arg call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedMemberInGenericConstructorBound() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public interface Arg {} public interface Other {} }"
+        + " public class PublicBase extends HiddenBase { protected <T extends Arg & Runnable> PublicBase(T value) {}"
+        + " protected PublicBase(Other value) {} }",
+        "q/Api.java", "package q; public class Api extends p.PublicBase {"
+        + " public <T extends Arg & Runnable> Api(T value) { super(value); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testQualifierRetainsRequiredMemberOfGeneratedRoot() throws Exception {
+    compile(classes, expected,
+        "p/Owner.java", "package p; class HiddenBase { public static class Arg {} }"
+        + " public class Owner { public native void own(); public static class PublicBase extends HiddenBase {} }",
+        "q/Api.java", "package q; public class Api { public native p.Owner.PublicBase.Arg call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testNativeBindingMismatchIsRejectedBeforeCompilation() throws Exception {
     compile(classes, expected,
         "Shadow.java", "public class Shadow {}",

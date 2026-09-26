@@ -312,8 +312,10 @@ final class JavacHeaders {
           if (model.outer() == null) { emit(model, new StringBuilder(), ""); }
         }
       } finally { planningDeclarations = false; }
+      declareSourceNames();
+      if (declarations.size() != previous) { continue; }
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) { planConstructor(model); }
-      declareReferencedMembers();
+      declareSourceNames();
     } while (declarations.size() != previous);
   }
 
@@ -325,6 +327,13 @@ final class JavacHeaders {
       planConstructor(declarations.get(model.parent));
     }
     if (!constructors.containsKey(model.name)) { constructors.put(model.name, constructor(model)); }
+  }
+
+  private void declareSourceNames() throws IOException {
+    for (JniSourceNames names : sourceUnits.values()) {
+      for (String name : names.references()) { reference(Type.getObjectType(name)); }
+    }
+    declareReferencedMembers();
   }
 
   private void declareReferencedMembers() throws IOException {
@@ -807,7 +816,7 @@ final class JavacHeaders {
 
   private JniSourceNames names(JniClass model) throws IOException { return names(model, true); }
 
-  private JniSourceNames names(JniClass model, boolean body) throws IOException {
+  private JniSourceNames names(final JniClass model, boolean body) throws IOException {
     JniClass root = root(model);
     JniSourceNames names = sourceUnits.get(root.name);
     if (names == null) {
@@ -815,7 +824,7 @@ final class JavacHeaders {
       sourceUnits.put(root.name, names);
     }
     Map<String, Set<String>> bindings = new HashMap<String, Set<String>>();
-    Map<String, Map<String, JniClass.Member>> members = new HashMap<String, Map<String, JniClass.Member>>();
+    final Map<String, Map<String, JniClass.Member>> members = new HashMap<String, Map<String, JniClass.Member>>();
     if (!body) { bindings.put(model.simple(), Collections.singleton(model.name)); }
     // Members are in scope in the body, not the superclass/interface clauses
     // (JLS 6.3). An inner declaration's header still sees its enclosing body.
@@ -835,7 +844,31 @@ final class JavacHeaders {
         if (!bindings.containsKey(entry.getKey())) { bindings.put(entry.getKey(), entry.getValue()); }
       }
     }
-    names.scope(bindings);
+    names.scope(bindings, new JniSourceNames.Access() {
+      public boolean visible(String name) throws IOException {
+        JniClass type = metadata.resolve(name);
+        return accessible(type.nesting == null ? type.access : type.nesting.access, type, model, false);
+      }
+      public Set<String> qualifiers(String name, boolean discover) throws IOException {
+        JniClass member = metadata.resolve(name);
+        Set<String> result = new TreeSet<String>();
+        for (String candidate : metadata.subtypes(member.outer(), discover)) {
+          try {
+            Map<String, JniClass.Member> inherited = memberTypes(metadata.resolve(candidate), members, new HashSet<String>());
+            if (!inherited.containsKey(name)) { continue; }
+            boolean unique = true;
+            for (Map.Entry<String, JniClass.Member> entry : inherited.entrySet()) {
+              if (member.simple().equals(entry.getValue().simple) && !name.equals(entry.getKey())) { unique = false; break; }
+            }
+            if (unique) { result.add(candidate); }
+          } catch (IOException unusable) {
+            // An unrelated potential qualifier with missing metadata must not
+            // prevent another candidate from providing the required member.
+          }
+        }
+        return result;
+      }
+    });
     return names;
   }
 
@@ -1234,14 +1267,13 @@ final class JavacHeaders {
   }
 
   private boolean constructorTypeAccessible(String name, JniClass model) throws IOException {
+    // Test the same spelling rules used for declarations, including inherited
+    // bindings and aliases. A rejected candidate must not retain its imports.
+    // Missing definitions are not inaccessible types: keep them as candidate
+    // diagnostics rather than allowing an untyped null to reach javac.
     metadata.sourceName(name);
-    JniClass parameter = metadata.resolve(name);
-    while (true) {
-      if (!accessible(parameter.nesting == null ? parameter.access : parameter.nesting.access,
-          parameter, model, false)) { return false; }
-      if (parameter.outer() == null) { return true; }
-      parameter = metadata.resolve(parameter.outer());
-    }
+    try { names(model).copy().name(name); return true; }
+    catch (IOException inaccessible) { return false; }
   }
 
   private boolean accessible(int access, JniClass owner, JniClass context, boolean constructor) throws IOException {
