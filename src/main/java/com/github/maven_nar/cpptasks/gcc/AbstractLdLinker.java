@@ -201,22 +201,9 @@ public abstract class AbstractLdLinker extends CommandLineLinker {
 
   @Override
   protected void addMap(final CCTask task, final boolean map, final Vector<String> args) {
-    // Defer until the link target's native prefix, suffix, and output-name overrides are resolved.
-  }
-
-  @Override
-  protected String[] getMapFileSwitch(final String outputFile, final boolean map) {
-    if (!map) {
-      return new String[0];
+    if (map) {
+      args.addElement("-M");
     }
-    final String option = "-Map=" + outputFile + ".map";
-    // Generated options must reach ld even when decoration of user-supplied options is disabled.
-    final String argument = decorateLinkerOption(new StringBuffer(), option);
-    if (outputFile.indexOf(',') >= 0 && argument.startsWith("-Wl,")) {
-      // GCC splits -Wl arguments on commas; -Xlinker preserves a literal comma in the filename.
-      return new String[] {"-Xlinker", option};
-    }
-    return new String[] {argument};
   }
 
   @Override

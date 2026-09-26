@@ -411,10 +411,14 @@ wish to run a GNU configure step but not the full make process.
 
 	Enables the production of a map file. Default is false.
 
-    With GNU ld, the map is written beside the native output, using its complete
-    filename with <<<.map>>> appended. For example, <<<libexample.so>>> produces
-    <<<libexample.so.map>>>. The plugin forwards the option through GCC or G++
-    automatically; enabling <<<decorateLinkerOptions>>> is not required.
+    With GCC, G++, Clang, or direct ld, the map is written beside the native output,
+    using its complete filename with <<<.map>>> appended. For example,
+    <<<libexample.so>>> produces <<<libexample.so.map>>>. The plugin chooses GNU or
+    Darwin map syntax from the configured target OS and forwards the option through
+    compiler drivers automatically; enabling <<<decorateLinkerOptions>>> is not required.
+
+    A missing map triggers relinking on the next build. Maps are included with their
+    native outputs in binary NAR archives.
 
 ** {linker pushDepsToLowestOrder}
 

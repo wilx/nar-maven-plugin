@@ -37,10 +37,12 @@ import com.github.maven_nar.cpptasks.compiler.LinkType;
 public class TestGnuLinkerMap extends TestCase {
   public void testGccMapFile() {
     assertDriverMap(GccLinker.getInstance(), "libprobe-1.2.so");
+    assertDriverMap(GccLinker.getCLangInstance(), "libprobe-1.2.so");
   }
 
   public void testGppMapFile() {
     assertDriverMap(GppLinker.getInstance(), "libprobe-1.2.so");
+    assertDriverMap(GppLinker.getCLangInstance(), "libprobe-1.2.so");
   }
 
   public void testCrossCompilerMapFiles() {
@@ -97,6 +99,9 @@ public class TestGnuLinkerMap extends TestCase {
 
   public void testLibraryFilteringPreservesMapArgument() {
     final CCTask task = new CCTask();
+    final org.apache.tools.ant.Project project = new org.apache.tools.ant.Project();
+    project.setProperty("nar.os", "Linux");
+    task.setProject(project);
     task.setDecorateLinkerOptions(false);
     final AbstractLdLinker linker = GppLinker.getInstance();
     final CommandLineLinkerConfiguration config = configuration(linker, task, true, new String[] {"dependency"});
@@ -120,6 +125,7 @@ public class TestGnuLinkerMap extends TestCase {
     final LinkerDef disabled = new LinkerDef();
     disabled.setMap(false);
     final org.apache.tools.ant.Project project = new org.apache.tools.ant.Project();
+    project.setProperty("nar.os", "Linux");
     task.setProject(project);
     defaults.setProject(project);
     enabled.setProject(project);
@@ -130,6 +136,10 @@ public class TestGnuLinkerMap extends TestCase {
         (ProcessorDef) disabled, null, null).getIdentifier();
     // A changed map setting must trigger a relink even when source files have not changed.
     assertFalse(enabledId.equals(disabledId));
+    project.setProperty("nar.os", "MacOSX");
+    final String darwinId = linker.createConfiguration(task, new LinkType(), new ProcessorDef[] {defaults},
+        (ProcessorDef) enabled, null, null).getIdentifier();
+    assertFalse("Changing map syntax must invalidate link history", enabledId.equals(darwinId));
   }
 
   public void testDarwinMapArgumentsForDriversAndDirectLd() {
