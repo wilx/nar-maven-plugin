@@ -165,8 +165,8 @@ to verify cross-JDK execution. The native selection additionally needs
 `it-parent`, `it0003-jni`, `it0007-lib-shared`, and `it0045-jni-isolation`.
 
 Validate minimum Java 8/Maven 3.6.3, modern Maven/JDKs, and Windows/macOS native
-lanes before changing the runner version. Local results and unavailable platform
-lanes are recorded in [the implementation record](development/issue-352-progress.md).
+lanes before changing the runner version. Record the exact Java/Maven versions,
+fixture selections, results, and any unavailable platforms with each upgrade.
 
 The adapter is coupled to Maven's `BuildPluginManager` and `MojoExecution`,
 Surefire's goal parameters/default descriptor, and its duplicate-execution
