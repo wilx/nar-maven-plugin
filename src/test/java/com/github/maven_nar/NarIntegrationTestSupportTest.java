@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Properties;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
@@ -32,7 +33,7 @@ public class NarIntegrationTestSupportTest {
     Map<String, String> configured = Collections.singletonMap("LD_LIBRARY_PATH", "/configured tail");
     Map<String, String> result = NarIntegrationTestSupport.loaderEnvironment(OS.LINUX,
         Arrays.asList("/project with spaces/jni", "/dependency/shared"), configured,
-        Collections.singletonMap("LD_LIBRARY_PATH", "/inherited"));
+        Collections.singletonMap("LD_LIBRARY_PATH", "/inherited"), new Properties());
     assertEquals("/project with spaces/jni:/dependency/shared:/configured tail", result.get("LD_LIBRARY_PATH"));
     assertEquals("/configured tail", configured.get("LD_LIBRARY_PATH"));
   }
@@ -43,7 +44,7 @@ public class NarIntegrationTestSupportTest {
         {OS.LINUX, "LD_LIBRARY_PATH"}}) {
       assertEquals("/native:/existing", NarIntegrationTestSupport.loaderEnvironment(platform[0],
           Collections.singletonList("/native"), Collections.<String, String>emptyMap(),
-          Collections.singletonMap(platform[1], "/existing")).get(platform[1]));
+          Collections.singletonMap(platform[1], "/existing"), new Properties()).get(platform[1]));
     }
   }
 
@@ -51,7 +52,7 @@ public class NarIntegrationTestSupportTest {
   public void emptyConfiguredTailDoesNotAddCurrentDirectory() {
     assertEquals("/native", NarIntegrationTestSupport.loaderEnvironment(OS.LINUX,
         Collections.singletonList("/native"), Collections.singletonMap("LD_LIBRARY_PATH", ""),
-        Collections.singletonMap("LD_LIBRARY_PATH", "/ignored")).get("LD_LIBRARY_PATH"));
+        Collections.singletonMap("LD_LIBRARY_PATH", "/ignored"), new Properties()).get("LD_LIBRARY_PATH"));
   }
 
   @Test
@@ -62,7 +63,7 @@ public class NarIntegrationTestSupportTest {
     configured.put("systemroot", "custom Windows");
     Map<String, String> result = NarIntegrationTestSupport.loaderEnvironment(OS.WINDOWS,
         Arrays.asList("native path", "dependency path"), configured,
-        Collections.singletonMap("SystemRoot", "inherited Windows"));
+        Collections.singletonMap("SystemRoot", "inherited Windows"), new Properties());
     assertEquals(2, result.size());
     assertEquals("native path;dependency path;configured tail", result.get("PATH"));
     assertEquals("custom Windows", result.get("SystemRoot"));
@@ -72,7 +73,7 @@ public class NarIntegrationTestSupportTest {
   public void windowsInheritedPathAndRootDefaults() {
     Map<String, String> result = NarIntegrationTestSupport.loaderEnvironment(OS.WINDOWS,
         Collections.singletonList("native path"), Collections.<String, String>emptyMap(),
-        Collections.singletonMap("Path", "inherited tail"));
+        Collections.singletonMap("Path", "inherited tail"), new Properties());
     assertEquals("native path;inherited tail", result.get("PATH"));
     assertEquals("C:" + (char) 92 + "Windows", result.get("SystemRoot"));
   }
@@ -81,6 +82,22 @@ public class NarIntegrationTestSupportTest {
   public void noNativePathsLeavesConfiguredEnvironmentAlone() {
     Map<String, String> configured = Collections.singletonMap("OTHER", "a value");
     assertEquals(configured, NarIntegrationTestSupport.loaderEnvironment(OS.LINUX,
-        Collections.<String>emptyList(), configured, Collections.singletonMap("LD_LIBRARY_PATH", "inherited")));
+        Collections.<String>emptyList(), configured, Collections.singletonMap("LD_LIBRARY_PATH", "inherited"), new Properties()));
   }
+
+  @Test
+  public void legacySystemPropertyFallbackIsUsedOnlyWithoutAnEnvironmentValue() {
+    Properties properties = new Properties();
+    properties.setProperty("LD_LIBRARY_PATH", "/legacy property");
+    properties.setProperty("SystemRoot", "legacy Windows");
+    Map<String, String> empty = Collections.emptyMap();
+    assertEquals("/native:/legacy property", NarIntegrationTestSupport.loaderEnvironment(OS.LINUX,
+        Collections.singletonList("/native"), empty, empty, properties).get("LD_LIBRARY_PATH"));
+    assertEquals("/native:/environment", NarIntegrationTestSupport.loaderEnvironment(OS.LINUX,
+        Collections.singletonList("/native"), empty, Collections.singletonMap("LD_LIBRARY_PATH", "/environment"),
+        properties).get("LD_LIBRARY_PATH"));
+    assertEquals("legacy Windows", NarIntegrationTestSupport.loaderEnvironment(OS.WINDOWS,
+        Collections.<String>emptyList(), empty, empty, properties).get("SystemRoot"));
+  }
+
 }

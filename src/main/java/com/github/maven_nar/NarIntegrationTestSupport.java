@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.TreeMap;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
@@ -78,7 +79,7 @@ final class NarIntegrationTestSupport {
             dependency.getBaseVersion(), aol, binding));
       }
     }
-    return loaderEnvironment(mojo.getOS(), paths, configured, inherited);
+    return loaderEnvironment(mojo.getOS(), paths, configured, inherited, System.getProperties());
   }
 
   private static void addExisting(List<String> paths, File directory) {
@@ -88,7 +89,7 @@ final class NarIntegrationTestSupport {
   }
 
   static Map<String, String> loaderEnvironment(String os, List<String> paths,
-      Map<String, String> configured, Map<String, String> inherited) {
+      Map<String, String> configured, Map<String, String> inherited, Properties systemProperties) {
     boolean windows = OS.WINDOWS.equals(os);
     Map<String, String> result = windows ? new TreeMap<>(String.CASE_INSENSITIVE_ORDER) : new LinkedHashMap<>();
     if (configured != null) {
@@ -101,6 +102,9 @@ final class NarIntegrationTestSupport {
       String tail = result.get(key);
       if (tail == null) {
         tail = inherited.get(key(inherited, name, windows));
+        if (tail == null) {
+          tail = systemProperties.getProperty(name);
+        }
       }
       String separator = windows ? ";" : ":";
       String value = String.join(separator, paths);
@@ -108,6 +112,9 @@ final class NarIntegrationTestSupport {
     }
     if (windows && !result.containsKey(key(result, "SystemRoot", true))) {
       String systemRoot = inherited.get(key(inherited, "SystemRoot", true));
+      if (systemRoot == null) {
+        systemRoot = systemProperties.getProperty("SystemRoot");
+      }
       result.put("SystemRoot", systemRoot == null ? "C:\\Windows" : systemRoot);
     }
     return result;
