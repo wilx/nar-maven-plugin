@@ -311,6 +311,72 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testQualifiedInheritedPublicMember() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase extends HiddenBase {}",
+        "q/Api.java", "package q; public class Api { public native p.PublicBase.Arg call(p.PublicBase.Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testQualifiedInheritedMemberWithOwnShadow() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase extends HiddenBase {}",
+        "q/Api.java", "package q; public class Api extends p.PublicBase { public static class Arg {} public native Arg local(Arg value); public native p.PublicBase.Arg call(p.PublicBase.Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedPublicMemberInClassHeader() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase extends HiddenBase {}",
+        "q/Api.java", "package q; public class Api extends p.PublicBase implements java.util.function.Supplier<Api.Arg> { public Arg get() { return null; } public native Arg call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedPublicConstructorArgument() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} public static class Other {} } public class PublicBase extends HiddenBase { protected PublicBase(Arg x) {} protected PublicBase(Other x) {} }",
+        "q/Api.java", "package q; public class Api extends p.PublicBase { public Api() { super((Arg) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPrivateDeclaringClassConstructorArgument() throws Exception {
+    compile(classes, expected,
+        "p/Container.java", "package p; public class Container { private static class HiddenBase { public static class Arg {} public static class Other {} } public static class PublicBase extends HiddenBase { protected PublicBase(Arg x) {} protected PublicBase(Other x) {} } }",
+        "q/Api.java", "package q; public class Api extends p.Container.PublicBase { public Api() { super((Arg) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPublicDeclaringClassConstructorControl() throws Exception {
+    compile(classes, expected,
+        "p/Base.java", "package p; public class Base { public static class Arg {} public static class Other {} }",
+        "p/PublicBase.java", "package p; public class PublicBase extends Base { protected PublicBase(Arg x) {} protected PublicBase(Other x) {} }",
+        "q/Api.java", "package q; public class Api extends p.PublicBase { public Api() { super((Arg) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedNestedMemberLexicalControl() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Types { public static class Arg {} } } public class PublicBase extends HiddenBase {}",
+        "q/Api.java", "package q; public class Api extends p.PublicBase { public native Types.Arg call(Types.Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testQualifiedPublicDeclaringClassControl() throws Exception {
+    compile(classes, expected,
+        "p/Base.java", "package p; public class Base { public static class Arg {} }",
+        "p/PublicBase.java", "package p; public class PublicBase extends Base {}",
+        "q/Api.java", "package q; public class Api { public native p.PublicBase.Arg call(p.PublicBase.Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testNativeBindingMismatchIsRejectedBeforeCompilation() throws Exception {
     compile(classes, expected,
         "Shadow.java", "public class Shadow {}",
