@@ -385,7 +385,8 @@ final class JniSignature extends SignatureVisitor {
       if (component != null) { return prefix + component.source(metadata, names) + "[]"; }
       if (name == null) { return prefix + erase().getClassName(); }
       StringBuilder text = new StringBuilder(prefix);
-      text.append(owner == null ? (names == null ? metadata.sourceName(name) : names.name(name)) : owner.source(metadata, names) + "." + metadata.resolve(name).simple());
+      text.append(owner == null ? (names == null ? metadata.sourceName(name) : names.name(name))
+          : names == null ? owner.source(metadata) + "." + metadata.resolve(name).simple() : names.member(this));
       if (!arguments.isEmpty()) {
         text.append('<');
         for (int i = 0; i < arguments.size(); i++) {

@@ -262,7 +262,10 @@ noarch area in the target directory.
  names, so an inherited public member can be used without naming its inaccessible
  declaring class. When a lexical name is hidden or unavailable, the generator
  looks for an accessible subtype qualifier whose member resolves to the same
- binary class. Constructor arguments and checked exceptions use these same
+ binary class. Parameterized member spellings preserve the declaring owner's type
+ arguments by projecting candidate qualifiers through their generic ancestry;
+ candidates must satisfy their bounds and denote the exact owner instantiation.
+ Constructor arguments and checked exceptions use these same
  spelling rules. Qualifier discovery first uses known metadata; if necessary,
  it indexes superclass/interface names from classpath files, respecting classpath
  precedence, manifest entries and the compiler's multi-release JAR view. This
@@ -278,7 +281,9 @@ noarch area in the target directory.
  trying another candidate when a throws clause cannot be expressed. Rejected
  candidates do not retain imports. Throwaway constructors retain required type parameters and all their bounds when casting
  arguments to generic superclass constructors, using fresh names to avoid shadowing
- classes or package names. Fully typed constructor calls are preferred. When
+ classes or package names. Fresh type parameter names reserve identifiers in the
+ actual selected spellings, including discovered qualifiers; subsequent name
+ resolution also avoids type parameters already in scope. Fully typed constructor calls are preferred. When
  constructor argument types or generic bounds cannot be named due to accessibility
  or source-name conflicts, calls using raw casts are tried before calls requiring
  bare null arguments, avoiding ambiguous overloads when a usable cast is available.

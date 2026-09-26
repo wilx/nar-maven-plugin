@@ -574,6 +574,138 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testParameterizedQualifierReordersArguments() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class Hidden<A, B> { public class Arg<C> {} }"
+        + " public class PublicBase<X, Y> extends Hidden<Y, X> {}",
+        "q/Api.java", "package q; public class Api implements java.util.function.Supplier<p.PublicBase<String, Integer>.Arg<Long>> {"
+        + " public p.PublicBase<String, Integer>.Arg<Long> get() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedQualifierMatchesNestedArguments() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} }"
+        + " public class PublicBase<X> extends Hidden<java.util.List<X>> {}",
+        "q/Api.java", "package q; public class Api implements java.util.function.Supplier<p.PublicBase<String>.Arg> {"
+        + " public p.PublicBase<String>.Arg get() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedQualifierWithFixedArgument() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} } public class PublicBase extends Hidden<String> {}",
+        "q/Api.java", "package q; public class Api implements java.util.function.Supplier<p.PublicBase.Arg> {"
+        + " public p.PublicBase.Arg get() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedQualifierWithUnusedParameter() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} }"
+        + " public class PublicBase<X, Y extends Number> extends Hidden<X> {}",
+        "q/Api.java", "package q; public class Api implements java.util.function.Supplier<p.PublicBase<String, Integer>.Arg> {"
+        + " public p.PublicBase<String, Integer>.Arg get() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedQualifierRejectsStrongerBounds() throws Exception {
+    compile(classes, expected,
+        "p/ZPublicBase.java", "package p; class Hidden<T> { public class Arg {} } public class ZPublicBase<X> extends Hidden<X> {}",
+        "p/ABounded.java", "package p; public class ABounded<X extends Number> extends Hidden<X> {}",
+        "q/Api.java", "package q; public class Api implements java.util.function.Supplier<p.ZPublicBase<String>.Arg> {"
+        + " public p.ZPublicBase<String>.Arg get() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedQualifierRetainsEnclosingArguments() throws Exception {
+    compile(classes, expected,
+        "p/Outer.java", "package p; class Hidden<A, B> { public class Arg {} }"
+        + " public class Outer<X> { public class PublicBase<Y> extends Hidden<X, Y> {} }",
+        "q/Api.java", "package q; public class Api implements java.util.function.Supplier<p.Outer<String>.PublicBase<Integer>.Arg> {"
+        + " public p.Outer<String>.PublicBase<Integer>.Arg get() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedQualifierUsesInterfaceBounds() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} }"
+        + " public class PublicBase<X extends Number & Comparable<X>> extends Hidden<X> {}",
+        "q/Outer.java", "package q; public interface Outer<T extends Number & Comparable<T>>"
+        + " extends java.util.function.Supplier<p.PublicBase<T>.Arg> { class Api { public native void call(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedQualifierUsesConstructorBounds() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} }"
+        + " public class PublicBase<X extends Number & Comparable<X>> extends Hidden<X> {}",
+        "p/Parent.java", "package p; public class Parent {"
+        + " protected <T extends Number & Comparable<T>> Parent(PublicBase<T>.Arg a, T b) {}"
+        + " protected Parent(String a, Runnable b, int c) {} }",
+        "q/Api.java", "package q; public class Api extends p.Parent {"
+        + " public Api(p.PublicBase<Integer>.Arg a) { super(a, (Integer) null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+    assertTrue(text(new File(work, "generated/sources/q/Api.java")).contains(".Arg) null"));
+  }
+
+  public void testParameterizedQualifierPreservesMethodVariable() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} }"
+        + " public class PublicBase<X extends Number & Comparable<X>> extends Hidden<X> {}",
+        "_NarMethod0.java", "public class _NarMethod0<X extends Number & Comparable<X>> extends p.PublicBase<X> {}",
+        "p/Left.java", "package p; public interface Left { default <T extends Number & Comparable<T>> PublicBase<T>.Arg call(T value) { return null; } }",
+        "p/Right.java", "package p; public interface Right { default <T extends Number & Comparable<T>> PublicBase<T>.Arg call(T value) { return null; } }",
+        "Api.java", "public class Api implements p.Left, p.Right { public <T extends Number & Comparable<T>> _NarMethod0<T>.Arg call(T value) { return null; }"
+        + " public native void nativeCall(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testClassVariableReservesGenericBodyQualifier() throws Exception {
+    compile(classes, expected,
+        "p/Exposed.java", "package p; class Hidden { public static class Arg {} } public class Exposed extends Hidden {}",
+        "_NarType0.java", "public class _NarType0 extends p.Exposed {}",
+        "p/Left.java", "package p; public interface Left { default <T> Exposed.Arg call(T value) { return null; } }",
+        "p/Right.java", "package p; public interface Right { default <T> Exposed.Arg call(T value) { return null; } }",
+        "Outer.java", "public interface Outer<X> extends p.Left, p.Right { <T> _NarType0.Arg call(T value);"
+        + " class Api { public native void nativeCall(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testActiveClassVariableDoesNotCaptureLaterQualifier() throws Exception {
+    compile(classes, expected,
+        "p/Exposed.java", "package p; class Hidden { public static class Arg {} } public class Exposed extends Hidden {}",
+        "_NarType0.java", "public class _NarType0 extends p.Exposed {}",
+        "p/Left.java", "package p; public interface Left { default Exposed.Arg call() { return null; } }",
+        "p/Right.java", "package p; public interface Right { default Exposed.Arg call() { return null; } }",
+        "Outer.java", "public interface Outer<X> extends p.Left, p.Right { _NarType0.Arg call();"
+        + " class Api { public native void nativeCall(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testDiscoveredQualifierPackageDoesNotCaptureMethodVariable() throws Exception {
+    compile(classes, expected,
+        "p/Exposed.java", "package p; class Hidden { public static class Arg {} } public class Exposed extends Hidden {}",
+        "_NarMethod0/Alias.java", "package _NarMethod0; public class Alias extends p.Exposed {}",
+        "p/Left.java", "package p; public interface Left { default <T> Exposed.Arg call(T value) { return null; } }",
+        "p/Right.java", "package p; public interface Right { default <T> Exposed.Arg call(T value) { return null; } }",
+        "Api.java", "public class Api implements p.Left, p.Right { public <T> _NarMethod0.Alias.Arg call(T value) { return null; }"
+        + " public native void nativeCall(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testNativeBindingMismatchIsRejectedBeforeCompilation() throws Exception {
     compile(classes, expected,
         "Shadow.java", "public class Shadow {}",
