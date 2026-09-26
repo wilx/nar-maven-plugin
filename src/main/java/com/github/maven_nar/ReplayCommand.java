@@ -24,6 +24,8 @@ import java.io.PrintWriter;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.apache.maven.plugin.MojoExecutionException;
 
@@ -90,13 +92,19 @@ public final class ReplayCommand {
       throw new MojoExecutionException("Unknown replay script type: " + script.getScriptType());
     }
     final String cwd = substitute(this.directory, script);
-    final String[] args = new String[this.arguments.length];
+    final List<String> args = new ArrayList<>();
     final StringBuilder command = new StringBuilder();
     boolean needsBase = false;
-    for (int i = 0; i < args.length; i++) {
-      args[i] = substitute(this.arguments[i], script);
-      final Argument argument = new Argument(this.arguments[i], args[i], script);
-      if (i != 0) command.append(' ');
+    for (int i = 0; i < this.arguments.length; i++) {
+      final String value = substitute(this.arguments[i], script);
+      // Only an explicitly emptied argument is removed, after every substitution has run.
+      if (!this.arguments[i].isEmpty() && value.isEmpty()) {
+        if (i == 0) throw new MojoExecutionException("Replay substitutions removed the executable: " + this.arguments[i]);
+        continue;
+      }
+      final Argument argument = new Argument(this.arguments[i], value, script);
+      if (!args.isEmpty()) command.append(' ');
+      args.add(value);
       command.append(argument.render(batch, i == 0));
       needsBase |= argument.fromInvocationDirectory;
     }
@@ -104,7 +112,8 @@ public final class ReplayCommand {
     final String temporary = this.temporaryMap.isEmpty() ? null : substitute(this.temporaryMap, script);
     final String destination = this.finalMap.isEmpty() ? null : substitute(this.finalMap, script);
     if (batch) {
-      writeBatch(script, writer, cwd, line, command(args, true), temporary, destination, needsBase);
+      writeBatch(script, writer, cwd, line, command(args.toArray(new String[args.size()]), true),
+          temporary, destination, needsBase);
     } else {
       writePosix(script, writer, cwd, line, temporary, destination, needsBase);
     }
@@ -173,7 +182,7 @@ public final class ReplayCommand {
     Argument(final String original, final String value, final Script script) {
       this.value = value;
       final int pathStart = pathStart(original, script);
-      this.prefix = pathStart < 0 ? "" : substitute(original.substring(0, pathStart), script);
+      this.prefix = pathStart <= 0 ? "" : substitute(original.substring(0, pathStart), script);
       this.fromInvocationDirectory = pathStart >= 0 && value.startsWith(this.prefix)
           && !isAbsolute(value.substring(this.prefix.length()));
     }

@@ -687,6 +687,11 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         List of substitutions that should be made while transforming command log to script file. Substitutions can be used to
         change absolute paths to relative paths, for example.
 
+        For structured replay entries, substitutions run in configuration order on each argument.
+        An originally nonempty argument is omitted if its final substituted value is empty;
+        removing the executable is a script-generation error. Originally empty arguments and
+        whitespace-only values are preserved. Replacements containing spaces remain one argument.
+
         [type] The type of substitution. Can be one of "string", "relativePath", "absolutePath", or "regex".
 
         [replace] String, path, or regex to use to match for replacements.

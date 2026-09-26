@@ -238,7 +238,7 @@ public class TestLinkerReplay {
   @Test
   public void testBatchReplayResolvesRelocatedPathsFromInvocationDirectory() throws Exception {
     Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
-    for (final String type : new String[] {"absolutePath", "string"}) {
+    for (final String type : new String[] {"absolutePath", "relativePath", "string", "regex"}) {
       for (final boolean map : new boolean[] {false, true}) {
         for (final boolean dry : new boolean[] {false, true}) {
           checkRelocatedPaths("bat", type, map, dry);
@@ -252,7 +252,8 @@ public class TestLinkerReplay {
     final String id = shell + type + map + dry;
     final File original = new File(directory, "original " + id);
     final File working = new File(original, "target/bin");
-    final File objects = new File(original, "target/object dir");
+    final File objects = new File(original, "target/object dir %PATH%! & "
+        + ("bat".equals(shell) ? "' ^" : map ? "' $" : "\" $"));
     assertTrue(working.mkdirs());
     assertTrue(objects.mkdirs());
     final File input = new File(objects, "input.o");
@@ -272,7 +273,9 @@ public class TestLinkerReplay {
     sub.setType(type);
     sub.setReplace(type.endsWith("Path") ? original.toString() : original + File.separator);
     if ("regex".equals(type)) sub.setReplace(java.util.regex.Pattern.quote(sub.getReplace()));
-    final File replay = script(history, shell, sub);
+    // A rule restoring empty arguments must not affect the base of nonempty paths.
+    final File replay = scriptWithSubstitutions(history, shell, Arrays.asList(sub,
+        substitution("regex", "^$", "restored argument")));
     // The original tree must be unavailable: otherwise an accidentally retained absolute path could pass.
     final String special = "bat".equals(shell) ? " %PATH%! & ^" : " %! & ' \" $";
     final File relocated = new File(directory, "relocated " + id + special);
