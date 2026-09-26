@@ -126,8 +126,30 @@ final class JniSignature extends SignatureVisitor {
 
   JniClass.Method method(JniClass.Method method, Map<String, Value> arguments) {
     Map<String, Value> scope = new HashMap<String, Value>(arguments);
+    if (bounds.isEmpty()) { return specializeMethod(method, scope); }
     // A method type parameter shadows a class/interface parameter of the same name.
     for (String variable : bounds.keySet()) { scope.remove(variable); }
+    // Receiver arguments may contain a caller variable with the same name as
+    // an unrelated method formal. Rename the formal before substitution, while
+    // its occurrences can still be distinguished from those caller variables.
+    Set<String> symbols = new HashSet<String>();
+    for (Value argument : scope.values()) { argument.scopeVariables(symbols); }
+    Set<String> reserved = new HashSet<String>(symbols);
+    reserved.addAll(scope.keySet());
+    reserved.addAll(bounds.keySet());
+    Map<String, String> names = new HashMap<String, String>();
+    int index = 0;
+    for (String variable : bounds.keySet()) {
+      if (symbols.contains(variable)) {
+        String fresh;
+        do { fresh = "_NarFormal" + index++; } while (!reserved.add(fresh));
+        names.put(variable, fresh);
+      }
+    }
+    return (names.isEmpty() ? this : rename(names)).specializeMethod(method, scope);
+  }
+
+  private JniClass.Method specializeMethod(JniClass.Method method, Map<String, Value> scope) {
     // Keep source variables symbolic, with their specialized erasures recorded
     // separately for method matching. Erasing <U extends T> to T in the source
     // does not necessarily override the original generic method.
@@ -367,6 +389,20 @@ final class JniSignature extends SignatureVisitor {
       if (owner != null) { owner.variables(names); }
       if (component != null) { component.variables(names); }
       for (Value argument : arguments) { argument.variables(names); }
+    }
+
+    void scopeVariables(Set<String> names) {
+      scopeVariables(names, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Value, Boolean>()));
+    }
+
+    private void scopeVariables(Set<String> names, Set<Value> visited) {
+      if (!visited.add(this)) { return; }
+      if (variable != null) { names.add(variable); }
+      if (owner != null) { owner.scopeVariables(names, visited); }
+      if (component != null) { component.scopeVariables(names, visited); }
+      for (Value argument : arguments) { argument.scopeVariables(names, visited); }
+      // Symbolic and captured bounds can refer back to their own variables.
+      for (Value bound : limits) { bound.scopeVariables(names, visited); }
     }
 
     void classNames(Set<String> names) {

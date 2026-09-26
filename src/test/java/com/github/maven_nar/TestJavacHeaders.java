@@ -3185,6 +3185,34 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testRetainedConstructorSpecializesRecursiveDependentFormals() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class Hidden<A> {"
+        + " protected <T extends CharSequence & Comparable<T>, U extends T> Hidden(A a, T b, U c) {}"
+        + " public class Arg {} } public class PublicBase<T extends Number> extends Hidden<T> {"
+        + " public PublicBase(T a) { super(a, \"\", \"\"); } public native T value(T a); }",
+        "q/Api.java", "package q; public abstract class Api implements"
+        + " java.util.function.Supplier<p.PublicBase<Integer>.Arg> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testRetainedSupportingMethodSpecializesDistinctFormals() throws Exception {
+    compile(classes, expected,
+        "p/Left.java", "package p; public interface Left<A> {"
+        + " default <T extends CharSequence> java.util.Map<A, T> apply(A a, T b) { return null; } }",
+        "p/Right.java", "package p; public interface Right<A> {"
+        + " default <U extends CharSequence> java.util.Map<A, U> apply(A a, U b) { return null; } }",
+        "p/PublicBase.java", "package p; class Hidden<A> { public class Arg {} }"
+        + " public class PublicBase<T extends Number> extends Hidden<T> implements Left<T>, Right<T> {"
+        + " public <U extends CharSequence> java.util.Map<T, U> apply(T a, U b) { return null; }"
+        + " public native T value(T a); }",
+        "q/Api.java", "package q; public abstract class Api implements"
+        + " java.util.function.Supplier<p.PublicBase<Integer>.Arg> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);

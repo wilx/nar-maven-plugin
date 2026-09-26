@@ -1483,6 +1483,9 @@ final class JavacHeaders {
     Set<String> reserved = new HashSet<String>();
     reserved.add("java"); // Qualified platform types.
     reserved.add(model.simple());
+    // Specialized parameters still use the declaration's original variables,
+    // including enclosing formals. An intermediate alias must not capture them.
+    reserved.addAll(declarationFormals(model).bounds.keySet());
     for (String name : types) { Collections.addAll(reserved, metadata.sourceName(name).split("\\.")); }
     // Constructor formals have a new scope: their original names may capture a
     // specialized class name or even a package prefix in a qualified source name.
