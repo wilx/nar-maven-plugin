@@ -574,6 +574,52 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testWildcardExtendsRejectsIncompatibleQualifierBound() throws Exception {
+    compile(classes, expected,"p/ZBase.java", "package p; class Hidden<T> { public class Arg {} } public class ZBase<T> extends Hidden<T> {}",
+      "p/ABounded.java", "package p; public class ABounded<T extends Number> extends Hidden<T> {}",
+      "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.ZBase<? extends String>.Arg> { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testWildcardSuperRejectsIncompatibleQualifierBound() throws Exception {
+    compile(classes, expected,"p/ZBase.java", "package p; class Hidden<T> { public class Arg {} } public class ZBase<T> extends Hidden<T> {}",
+      "p/ABounded.java", "package p; public class ABounded<T extends Number> extends Hidden<T> {}",
+      "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.ZBase<? super String>.Arg> { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testWildcardRejectsConflictingGenericQualifierBound() throws Exception {
+    compile(classes, expected,"p/ZBase.java", "package p; class Hidden<T> { public class Arg {} } public class ZBase<T> extends Hidden<T> {}",
+      "p/ABounded.java", "package p; public class ABounded<T extends Comparable<Integer>> extends Hidden<T> {}",
+      "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.ZBase<? extends String>.Arg> { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testWildcardCompatibleQualifierBoundControl() throws Exception {
+    compile(classes, expected,"p/ZBase.java", "package p; class Hidden<T> { public class Arg {} } public class ZBase<T> extends Hidden<T> {}",
+      "p/ABounded.java", "package p; public class ABounded<T extends Number> extends Hidden<T> {}",
+      "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.ZBase<? extends Integer>.Arg> { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testUnboundedWildcardQualifierControl() throws Exception {
+    compile(classes, expected,"p/ZBase.java", "package p; class Hidden<T> { public class Arg {} } public class ZBase<T> extends Hidden<T> {}",
+      "p/ABounded.java", "package p; public class ABounded<T extends Number> extends Hidden<T> {}",
+      "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.ZBase<?>.Arg> { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testParameterizedQualifierIsAlsoNativeTarget() throws Exception {
+    compile(classes, expected,"p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} } public class PublicBase<T> extends Hidden<T> { public native void base(); }",
+      "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.PublicBase<String>.Arg> { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testFixedQualifierIsAlsoNativeTargetControl() throws Exception {
+    compile(classes, expected,"p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} } public class PublicBase extends Hidden<String> { public native void base(); }",
+      "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.PublicBase.Arg> { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testArrayArgumentInParameterizedQualifierControl() throws Exception {
+    compile(classes, expected,"p/PublicBase.java", "package p; class Hidden<T> { public class Arg {} } public class PublicBase<T> extends Hidden<T[]> {}",
+      "q/Api.java", "package q; public abstract class Api implements java.util.function.Supplier<p.PublicBase<String>.Arg> { public native void call(); }"); generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testParameterizedQualifierReordersArguments() throws Exception {
     compile(classes, expected,
         "p/PublicBase.java", "package p; class Hidden<A, B> { public class Arg<C> {} }"
