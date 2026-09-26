@@ -373,6 +373,7 @@ public abstract class CommandLineLinker extends AbstractLinker {
     }
     final File mapFile = config.getMapFile(outputFile);
     File temporaryMap = null;
+    String temporaryMapName = null;
     try {
       CommandLineLinkerConfiguration invocation = config;
       if (mapFile != null) {
@@ -381,7 +382,8 @@ public abstract class CommandLineLinker extends AbstractLinker {
         if (!isDryRun()) {
           temporaryMap = File.createTempFile("nar-map-", ".tmp", parentDir);
         }
-        invocation = config.withMapFileName(temporaryMap == null ? "nar-map-dry-run.tmp" : temporaryMap.getName());
+        temporaryMapName = temporaryMap == null ? "nar-map-" + UUID.randomUUID() + ".tmp" : temporaryMap.getName();
+        invocation = config.withMapFileName(temporaryMapName);
       }
       String[] execArgs = prepareArguments(task, parentPath, outputFile.getName(), sourceFiles, invocation);
       int commandLength = 0;
@@ -394,7 +396,7 @@ public abstract class CommandLineLinker extends AbstractLinker {
         execArgs = prepareResponseFile(outputFile, execArgs);
       }
 
-      recordCommand(parentDir, execArgs);
+      recordCommand(parentDir, execArgs, temporaryMapName, mapFile == null ? null : mapFile.getName());
       final int retval = runCommand(task, parentDir, execArgs);
       if (retval != 0) {
         throw new BuildException(getCommandWithPath(config) + " failed with return code " + retval, task.getLocation());
@@ -548,9 +550,10 @@ public abstract class CommandLineLinker extends AbstractLinker {
     return false;
   }
 
-  private void recordCommand(final File workingDir, final String[] arguments) {
+  private void recordCommand(final File workingDir, final String[] arguments, final String temporaryMap,
+      final String finalMap) {
     if (this.commands instanceof ReplayCommandList && hasRawReplayArguments()) {
-      ((ReplayCommandList) this.commands).add(arguments, new ReplayCommand(workingDir, arguments));
+      ((ReplayCommandList) this.commands).add(arguments, new ReplayCommand(workingDir, arguments, temporaryMap, finalMap));
     } else if (this.commands != null) {
       this.commands.add(arguments);
     }

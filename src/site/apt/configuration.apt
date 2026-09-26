@@ -640,6 +640,11 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         for their respective shells. Substitutions on these entries apply to arguments
         and working directories before quoting. Existing plain-text replay logs remain supported.
 
+        When linker maps are enabled, replay scripts check that linking produced a nonempty
+        map and move it beside the native output with <<<.map>>> appended. Failed links
+        preserve any previous map, remove temporary maps, and stop the script with a failure status.
+        Dry runs record the same steps without creating native outputs or temporary maps.
+
 ** {outputDirectory}
 
         Directory where replay logs should be recorded to. Defaults to ${project.build.directory}/nar/nar-replay

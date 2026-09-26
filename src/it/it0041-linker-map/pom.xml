@@ -29,6 +29,23 @@
   </parent>
   <artifactId>it0041-linker-map</artifactId>
   <packaging>pom</packaging>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>com.github.maven-nar</groupId>
+        <artifactId>nar-maven-plugin</artifactId>
+        <configuration>
+          <skipTests>true</skipTests>
+          <replay>
+            <scripts>
+              <script><id>relink-sh</id><scriptType>sh</scriptType><compile>false</compile></script>
+              <script><id>relink-bash</id><scriptType>bash</scriptType><compile>false</compile></script>
+            </scripts>
+          </replay>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
   <modules>
     <module>gcc</module>
     <module>gcc-decorated</module>

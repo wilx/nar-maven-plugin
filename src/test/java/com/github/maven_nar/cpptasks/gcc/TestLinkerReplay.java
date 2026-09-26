@@ -172,6 +172,37 @@ public class TestLinkerReplay {
   }
 
   @Test
+  public void testReplayRejectsStaleMap() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    final List<String[]> commands = record(directory, "probe", "MISSING", true, true, new RecordingMojo().history());
+    for (final String argument : commands.get(0)) {
+      if (argument.startsWith("-Map=")) {
+        Files.write(new File(directory, argument.substring(5)).toPath(), "stale map".getBytes(StandardCharsets.UTF_8));
+      }
+    }
+    assertTrue(execute(script(commands, "sh", null), "sh") != 0);
+    assertFalse(new File(directory, "probe.map").exists());
+    assertNoTemporaryMaps(directory);
+  }
+
+  @Test
+  public void testBatchReplayPublishesMapAndPreservesFailureStatus() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    final File map = new File(directory, "probe %!&.map");
+    for (final String value : new String[] {"contents", "FAIL", "MISSING"}) {
+      Files.write(map.toPath(), "previous map".getBytes(StandardCharsets.UTF_8));
+      final List<String[]> commands = record(directory, "probe %!&", value, true, true, new RecordingMojo().history());
+      final File scriptFile = script(commands, "bat", null);
+      final Process process = new ProcessBuilder("cmd.exe", "/d", "/c", scriptFile.getAbsolutePath()).directory(directory)
+          .redirectErrorStream(true).redirectOutput(new File(directory, "run.log")).start();
+      final int status = process.waitFor();
+      assertEquals(read(new File(directory, "run.log")), "contents".equals(value) ? 0 : "FAIL".equals(value) ? 7 : 1, status);
+      assertEquals("contents".equals(value) ? value : "previous map", read(map));
+      assertNoTemporaryMaps(directory);
+    }
+  }
+
+  @Test
   public void testReplayHandlesMultipleOutputs() throws Exception {
     Assume.assumeTrue(new File("/bin/sh").isFile());
     final List<String[]> commands = new RecordingMojo().history();

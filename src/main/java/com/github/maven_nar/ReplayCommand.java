@@ -29,37 +29,51 @@ import org.apache.maven.plugin.MojoExecutionException;
 
 /** A raw argument vector, kept separate from shell syntax until a replay script is written. */
 public final class ReplayCommand {
-  private static final String HEADER = "# nar-replay-v1\t";
+  private static final String LEGACY_HEADER = "# nar-replay-v1\t";
+  private static final String HEADER = "# nar-replay-v2\t";
   private final String directory;
   private final String[] arguments;
+  private final String temporaryMap;
+  private final String finalMap;
 
   public ReplayCommand(final File directory, final String[] arguments) {
-    this(directory.getAbsolutePath(), arguments);
+    this(directory.getAbsolutePath(), arguments, "", "");
   }
 
-  private ReplayCommand(final String directory, final String[] arguments) {
+  public ReplayCommand(final File directory, final String[] arguments, final String temporaryMap, final String finalMap) {
+    this(directory.getAbsolutePath(), arguments, temporaryMap == null ? "" : temporaryMap, finalMap == null ? "" : finalMap);
+  }
+
+  private ReplayCommand(final String directory, final String[] arguments, final String temporaryMap, final String finalMap) {
     this.directory = directory;
     this.arguments = arguments.clone();
+    this.temporaryMap = temporaryMap;
+    this.finalMap = finalMap;
   }
 
   public static boolean isRecord(final String line) {
-    return line.startsWith(HEADER);
+    return line.startsWith(HEADER) || line.startsWith(LEGACY_HEADER);
   }
 
-  /** A comment followed by a readable command keeps logs usable as shell command logs. */
+  /** Preserve literal arguments in metadata alongside a readable command. */
   public String encode() throws UnsupportedEncodingException {
     final StringBuilder result = new StringBuilder(HEADER).append(URLEncoder.encode(this.directory, "UTF-8"));
+    result.append('\t').append(URLEncoder.encode(this.temporaryMap, "UTF-8"));
+    result.append('\t').append(URLEncoder.encode(this.finalMap, "UTF-8"));
     for (final String argument : this.arguments) result.append('\t').append(URLEncoder.encode(argument, "UTF-8"));
     return result.toString();
   }
 
   public static ReplayCommand decode(final String line) throws MojoExecutionException {
     try {
-      final String[] fields = line.substring(HEADER.length()).split("\t", -1);
-      if (fields.length < 2) throw new IllegalArgumentException("Missing command arguments");
-      final String[] args = new String[fields.length - 1];
-      for (int i = 1; i < fields.length; i++) args[i - 1] = URLDecoder.decode(fields[i], "UTF-8");
-      return new ReplayCommand(URLDecoder.decode(fields[0], "UTF-8"), args);
+      final boolean legacy = line.startsWith(LEGACY_HEADER);
+      final int offset = legacy ? 1 : 3;
+      final String[] fields = line.substring((legacy ? LEGACY_HEADER : HEADER).length()).split("\t", -1);
+      if (fields.length <= offset) throw new IllegalArgumentException("Missing command arguments");
+      final String[] args = new String[fields.length - offset];
+      for (int i = offset; i < fields.length; i++) args[i - offset] = URLDecoder.decode(fields[i], "UTF-8");
+      return new ReplayCommand(URLDecoder.decode(fields[0], "UTF-8"), args,
+          legacy ? "" : URLDecoder.decode(fields[1], "UTF-8"), legacy ? "" : URLDecoder.decode(fields[2], "UTF-8"));
     } catch (final IllegalArgumentException | UnsupportedEncodingException ex) {
       throw new MojoExecutionException("Invalid structured replay command", ex);
     }
@@ -79,23 +93,65 @@ public final class ReplayCommand {
     final String[] args = new String[this.arguments.length];
     for (int i = 0; i < args.length; i++) args[i] = substitute(this.arguments[i], script);
     final String line = command(args, batch);
+    final String temporary = this.temporaryMap.isEmpty() ? null : substitute(this.temporaryMap, script);
+    final String destination = this.finalMap.isEmpty() ? null : substitute(this.finalMap, script);
     if (batch) {
-      writer.println("setlocal DisableDelayedExpansion");
-      writer.println("pushd " + batchPath(cwd));
-      writer.println("if errorlevel 1 exit /b 1");
-      if (script.isEchoLines()) writer.println("echo " + echoBatch(line));
-      writer.println(line);
-      writer.println("set \"_nar_replay_status=%errorlevel%\"");
-      writer.println("popd");
-      writer.println("if not \"%_nar_replay_status%\"==\"0\" exit /b %_nar_replay_status%");
-      writer.println("endlocal");
+      writeBatch(script, writer, cwd, line, temporary, destination);
     } else {
-      writer.println("(");
-      writer.println("cd " + quote(cwd, false) + " || exit $?");
-      if (script.isEchoLines()) writer.println("printf '%s\\n' " + quote(line, false));
-      writer.println(line);
-      writer.println(") || exit $?");
+      writePosix(script, writer, cwd, line, temporary, destination);
     }
+  }
+
+  private static void writePosix(final Script script, final PrintWriter writer, final String cwd, final String line,
+      final String temporary, final String destination) {
+    writer.println("(");
+    writer.println("cd " + quote(cwd, false) + " || exit $?");
+    final String temp = temporary == null ? null : quote("./" + temporary, false);
+    if (temp != null) {
+      // Clear an earlier failed replay's map so a linker that produces nothing cannot appear successful.
+      writer.println("trap " + quote("rm -f " + temp, false) + " 0");
+      writer.println("rm -f " + temp + " || exit $?");
+    }
+    if (script.isEchoLines()) writer.println("printf '%s\\n' " + quote(line, false));
+    writer.println(line);
+    if (temp != null) {
+      writer.println("_nar_replay_status=$?");
+      writer.println("if [ \"$_nar_replay_status\" -ne 0 ]; then exit \"$_nar_replay_status\"; fi");
+      writer.println("test -s " + temp + " || exit 1");
+      final String output = quote("./" + destination, false);
+      writer.println("test ! -d " + output + " || exit 1");
+      writer.println("mv -f " + temp + " " + output + " || exit $?");
+    }
+    writer.println(") || exit $?");
+  }
+
+  private static void writeBatch(final Script script, final PrintWriter writer, final String cwd, final String line,
+      final String temporary, final String destination) {
+    writer.println("setlocal DisableDelayedExpansion");
+    writer.println("pushd " + batchPath(cwd));
+    writer.println("if errorlevel 1 exit /b 1");
+    final String temp = temporary == null ? null : batchPath(".\\" + temporary);
+    if (temp != null) {
+      writer.println("if exist " + temp + " del /f /q " + temp);
+      writer.println("if exist " + temp + " (popd & exit /b 1)");
+    }
+    if (script.isEchoLines()) writer.println("echo " + echoBatch(line));
+    writer.println(line);
+    writer.println("set \"_nar_replay_status=%errorlevel%\"");
+    if (temp != null) {
+      writer.println("if \"%_nar_replay_status%\"==\"0\" if not exist " + temp + " set \"_nar_replay_status=1\"");
+      writer.println("if \"%_nar_replay_status%\"==\"0\" for %%F in (" + temp + ") do if %%~zF==0 set \"_nar_replay_status=1\"");
+      writer.println("set \"_nar_replay_attributes=\"");
+      writer.println("if \"%_nar_replay_status%\"==\"0\" for %%F in (" + batchPath(".\\" + destination)
+          + ") do set \"_nar_replay_attributes=%%~aF\"");
+      writer.println("if \"%_nar_replay_attributes:~0,1%\"==\"d\" set \"_nar_replay_status=1\"");
+      writer.println("if \"%_nar_replay_status%\"==\"0\" move /y " + temp + " " + batchPath(".\\" + destination) + " >nul");
+      writer.println("if \"%_nar_replay_status%\"==\"0\" set \"_nar_replay_status=%errorlevel%\"");
+      writer.println("if exist " + temp + " del /f /q " + temp);
+    }
+    writer.println("popd");
+    writer.println("if not \"%_nar_replay_status%\"==\"0\" exit /b %_nar_replay_status%");
+    writer.println("endlocal");
   }
 
   private static String substitute(final String value, final Script script) {
