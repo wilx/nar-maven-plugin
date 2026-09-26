@@ -254,14 +254,19 @@ noarch area in the target directory.
  emitted invocation's inferred type arguments. Unconstrained throws-only type
  variables can infer <<<RuntimeException>>>; unchecked exceptions require no throws
  clause. Dependent bounds retain checked coverage needed by older compilers. Inaccessible or shadowed checked exception
- names use the nearest usable superclass, and generated subclasses follow the
- throws clause actually emitted for their parent. Constructor selection checks
+ names use the nearest usable superclass, including when a default-package name
+ conflicts with an import. Types from the default package are never imported.
+ Generated subclasses follow the throws clause actually emitted for their parent;
+ a parent constructor choice is retained only if its generated descendants can
+ express the resulting clauses. Rejected choices discard descendant imports and
+ references before another parent candidate is considered. Constructor selection checks
  exception and argument spellings against the compilation unit's required names,
  trying another candidate when a throws clause cannot be expressed. Rejected
  candidates do not retain imports. Throwaway constructors retain required type parameters and all their bounds when casting
  arguments to generic superclass constructors, using fresh names to avoid shadowing
- classes or package names. Fully typed constructor calls are preferred. When private
- generic types cannot be named, calls using raw casts are tried before calls requiring
+ classes or package names. Fully typed constructor calls are preferred. When
+ constructor argument types or generic bounds cannot be named due to accessibility
+ or source-name conflicts, calls using raw casts are tried before calls requiring
  bare null arguments, avoiding ambiguous overloads when a usable cast is available.
  Null inference remains available for inaccessible constructor bounds. Constructor
  calls are selected from class metadata before compilation, checking applicability,

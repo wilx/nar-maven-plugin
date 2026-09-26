@@ -57,6 +57,15 @@ final class JniSourceNames {
     return result;
   }
 
+  void use(JniSourceNames source) {
+    shadowed = source.shadowed;
+    collecting = source.collecting;
+    unnamedTypes.clear(); unnamedTypes.addAll(source.unnamedTypes);
+    unqualified.clear(); unqualified.addAll(source.unqualified);
+    qualifiedPrefixes.clear(); qualifiedPrefixes.addAll(source.qualifiedPrefixes);
+    imports.clear(); imports.putAll(source.imports);
+  }
+
   void reserve(Set<String> types) throws IOException {
     for (String binary : types) {
       JniClass model = metadata.resolve(binary);
@@ -72,8 +81,6 @@ final class JniSourceNames {
 
   void scope(Set<String> shadowed) { this.shadowed = shadowed; }
 
-  boolean isCollecting() { return collecting; }
-
   void finishCollecting() { collecting = false; }
 
   Set<String> imports() { return new TreeSet<String>(imports.values()); }
@@ -81,11 +88,13 @@ final class JniSourceNames {
   String name(String binary) throws IOException {
     String qualified = metadata.sourceName(binary);
     int dot = qualified.indexOf('.');
+    // Every spelling must preserve its binding, including exceptions discovered
+    // after mandatory imports and members of a default-package enclosing type.
+    reserve(Collections.singleton(binary));
     if (collecting) {
       // A default-package root (including Owner.Member references) has no
       // alternative qualified spelling. Reserve it across the whole unit before
       // introducing any imports, even imports used by synthetic constructors.
-      reserve(Collections.singleton(binary));
       return qualified;
     }
     if (dot < 0) { return qualified; }
@@ -111,6 +120,8 @@ final class JniSourceNames {
       String canonical = metadata.sourceName(candidate.name);
       String simple = candidate.simple();
       if (candidate.name.equals(root)) { return simple + qualified.substring(canonical.length()); }
+      // Java forbids imports from the unnamed package, including member types.
+      if (candidate.packageName().isEmpty()) { continue; }
       if (shadowed.contains(simple) || unqualified.contains(simple) || qualifiedPrefixes.contains(simple)) { continue; }
       String existing = imports.get(simple);
       if (existing != null && !existing.equals(canonical)) { continue; }

@@ -2086,6 +2086,42 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testDescendantRejectionRollsBackParentImports() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}",
+        "Throwable.java", "public class Throwable {}", "Problem.java", "public class Problem {}",
+        "one/Problem.java", "package one; public class Problem extends Exception {}",
+        "two/Problem.java", "package two; public class Problem extends Exception {}",
+        "Base.java", "public class Base { protected Base() throws one.Problem {}"
+        + " protected Base(int value) throws two.Problem {} }",
+        "Owner.java", "import two.Problem; public class Owner { public static class one {} public static class two {}"
+        + " public static class Parent extends Base { public Parent() throws Problem {super(0);}"
+        + " public native void parent(one a, two b); } }",
+        "java.java", "public class java extends Owner.Parent { public static class one {}"
+        + " public java() throws two.Problem {} public native void call(Exception e, Throwable t, Problem p, one a); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testShadowedGenericBoundKeepsDisambiguatingRawCast() throws Exception {
+    compile(classes, expected, "Bound.java", "public class Bound {}",
+        "q/Bound.java", "package q; public class Bound {}",
+        "Base.java", "public class Base { protected <T extends Bound> Base(java.util.List<T> values) {}"
+        + " protected Base(String value) {} }",
+        "q.java", "import q.Bound; public class q extends Base { public q(){super((java.util.List)null);}"
+        + " public native Bound call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testNestedDefaultPackageExceptionHiddenByMember() throws Exception {
+    compile(classes, expected, "Owner.java", "public class Owner { public static class Problem extends Exception {} }",
+        "Base.java", "public class Base { protected Base() throws Owner.Problem {} }",
+        "Api.java", "public class Api extends Base { public static class Owner {}"
+        + " public Api() throws Exception {} public native void call(Owner value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);

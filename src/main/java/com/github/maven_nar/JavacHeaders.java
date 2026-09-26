@@ -324,7 +324,7 @@ final class JavacHeaders {
     if (model.parent != null && declarations.containsKey(model.parent)) {
       planConstructor(declarations.get(model.parent));
     }
-    constructors.put(model.name, constructor(model));
+    if (!constructors.containsKey(model.name)) { constructors.put(model.name, constructor(model)); }
   }
 
   private void declareReferencedMembers() throws IOException {
@@ -961,7 +961,9 @@ final class JavacHeaders {
       JniClass exception = metadata.resolve(name);
       try {
         if (constructorTypeAccessible(name, model)) {
-          if (names != null) { names.name(name); }
+          JniSourceNames trial = names.copy();
+          trial.name(name);
+          names.use(trial);
           return name;
         }
       } catch (IOException unexpressible) {
@@ -987,13 +989,32 @@ final class JavacHeaders {
     Constructor result = new Constructor(formals, owner, arguments, exceptions);
     JniSourceNames previousNames = sourceNames;
     Map<String, String> previousVariables = sourceVariables;
+    Map<String, JniSourceNames> previousUnits = new HashMap<String, JniSourceNames>(sourceUnits);
+    Map<String, Constructor> previousConstructors = new HashMap<String, Constructor>(constructors);
+    Set<String> previousReferences = new HashSet<String>(references);
+    boolean retained = false;
     try {
       sourceNames = trial;
       emitConstructor(model, result, new StringBuilder(), "");
       for (String type : types) { reference(Type.getObjectType(type)); }
       sourceUnits.put(root(model).name, trial);
+      constructors.put(model.name, result);
+      // A locally valid choice may impose an unspellable throws clause on a
+      // generated descendant. Validate the whole inheritance subtree before
+      // retaining this candidate, including exception widening in intermediates.
+      for (JniClass child : declarations.values()) {
+        if (model.name.equals(child.parent)) { constructors.put(child.name, constructor(child)); }
+      }
+      retained = true;
       return result;
     } finally {
+      if (!retained) {
+        // Roll back sibling/descendant imports and references too, so the next
+        // parent candidate is evaluated against the same declaration context.
+        sourceUnits.clear(); sourceUnits.putAll(previousUnits);
+        constructors.clear(); constructors.putAll(previousConstructors);
+        references.clear(); references.addAll(previousReferences);
+      }
       sourceNames = previousNames;
       sourceVariables = previousVariables;
     }
@@ -1109,31 +1130,53 @@ final class JavacHeaders {
         for (JniSignature.Value bound : formal.getValue()) {
           Set<String> variables = new HashSet<String>();
           bound.variables(variables);
-          if (!Collections.disjoint(hidden, variables) || !constructorTypeAccessible(sourceType(bound), model)) {
+          if (!Collections.disjoint(hidden, variables)
+              || constructorTypeNames(sourceType(bound), null, model, names(model)) == null) {
             hidden.add(formal.getKey());
           }
         }
       }
     } while (hidden.size() != previous);
+    JniSourceNames spellings = names(model).copy();
     for (int i = 0; i < arguments.size(); i++) {
       JniSignature.Value argument = arguments.get(i);
       Set<String> variables = new HashSet<String>();
       argument.variables(variables);
-      if (Collections.disjoint(hidden, variables) && constructorTypeAccessible(argument, model)) { continue; }
+      JniSourceNames trial = Collections.disjoint(hidden, variables)
+          ? constructorTypeNames(argument, source, model, spellings) : null;
+      if (trial != null) { spellings = trial; continue; }
       JniSignature.Value element = argument;
       while (element.component != null) { element = element.component; }
       JniSignature.Value erased = JniSignature.Value.type(argument.erase());
       // A raw List cast can hide List<Private>, but a variable's erasure cannot
       // express its intersection bounds. Leave that argument to null inference.
-      arguments.set(i, element.variable == null && constructorTypeAccessible(erased, model) ? erased : null);
+      trial = element.variable == null ? constructorTypeNames(erased, null, model, spellings) : null;
+      arguments.set(i, trial == null ? null : erased);
+      if (trial != null) { spellings = trial; }
     }
   }
 
-  private boolean constructorTypeAccessible(JniSignature.Value type, JniClass model) throws IOException {
-    Set<String> names = new HashSet<String>();
-    type.classNames(names);
-    for (String name : names) { if (!constructorTypeAccessible(name, model)) { return false; } }
-    return true;
+  private JniSourceNames constructorTypeNames(JniSignature.Value type, JniSignature source, JniClass model,
+      JniSourceNames names) throws IOException {
+    Set<String> required = new TreeSet<String>();
+    type.classNames(required);
+    if (source != null) {
+      for (List<JniSignature.Value> bounds : source.constructorFormals(Collections.singletonList(type)).bounds.values()) {
+        for (JniSignature.Value bound : bounds) { sourceType(bound).classNames(required); }
+      }
+    }
+    for (String name : required) { if (!constructorTypeAccessible(name, model)) { return null; } }
+    JniSourceNames trial = names.copy();
+    try {
+      trial.reserve(required);
+      for (String name : required) { trial.name(name); }
+      return trial;
+    } catch (IOException unexpressible) {
+      // Accessibility is insufficient: a mandatory import or a lexical type can
+      // hide an otherwise public parameter. Try a raw cast or uncast null; the
+      // overload resolver still has to prove that the resulting call is unique.
+      return null;
+    }
   }
 
   private JniSignature constructorSignature(JniSignature source, JniSignature.Value parent, JniClass model)
