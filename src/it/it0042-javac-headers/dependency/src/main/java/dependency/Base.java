@@ -20,7 +20,14 @@
 package dependency;
 
 public class Base<T> implements java.util.function.Supplier<T> {
-  protected <java extends Number & Comparable<java>> Base(T value, java count) {}
-  public T get() { return null; }
-  public Container.Marker self() { return null; }
+  protected <java extends Number & Comparable<java>> Base(T value, java count) {
+  }
+
+  public T get() {
+    return null;
+  }
+
+  public Container.Marker self() {
+    return null;
+  }
 }

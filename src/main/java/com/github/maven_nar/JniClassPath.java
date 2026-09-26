@@ -48,10 +48,15 @@ import java.util.TreeSet;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+
 import javax.lang.model.SourceVersion;
+
 import org.objectweb.asm.ClassReader;
 
-/** Lazy metadata lookup, including the selected compiler's platform and MR-JAR view. */
+/**
+ * Lazy metadata lookup, including the selected compiler's platform and MR-JAR
+ * view.
+ */
 final class JniClassPath implements Closeable {
   private final List<File> entries;
   private final List<File> platform = new ArrayList<File>();
@@ -73,7 +78,11 @@ final class JniClassPath implements Closeable {
     File[] jars = modules.listFiles();
     if (jars != null) {
       Arrays.sort(jars);
-      for (File jar : jars) { if (jar.getName().endsWith(".jmod")) { platform.add(jar); } }
+      for (File jar : jars) {
+        if (jar.getName().endsWith(".jmod")) {
+          platform.add(jar);
+        }
+      }
     } else {
       platform.add(new File(javaHome, "jre/lib/rt.jar"));
       platform.add(new File(javaHome, "lib/rt.jar"));
@@ -93,25 +102,42 @@ final class JniClassPath implements Closeable {
 
   JniClass resolve(String name) throws IOException {
     JniClass cached = classes.get(name);
-    if (cached != null) { return cached; }
+    if (cached != null) {
+      return cached;
+    }
     // Platform classes cannot be replaced with application stubs.
     JniClass found = null;
-    if (name.startsWith("java/")) { found = findPlatform(name); }
-    if (found == null) { found = find(entries, name, false); }
-    if (found == null) { found = findPlatform(name); }
-    if (found == null) { throw new IOException("Missing class definition: " + name.replace('/', '.')); }
-    if (!name.equals(found.name)) { throw new IOException("Conflicting class definition for " + name + ": " + found.name); }
+    if (name.startsWith("java/")) {
+      found = findPlatform(name);
+    }
+    if (found == null) {
+      found = find(entries, name, false);
+    }
+    if (found == null) {
+      found = findPlatform(name);
+    }
+    if (found == null) {
+      throw new IOException("Missing class definition: " + name.replace('/', '.'));
+    }
+    if (!name.equals(found.name)) {
+      throw new IOException("Conflicting class definition for " + name + ": " + found.name);
+    }
     classes.put(name, found);
     return found;
   }
 
-  /** Probe only a possible package/type collision, without traversing its dependencies. */
+  /**
+   * Probe only a possible package/type collision, without traversing its
+   * dependencies.
+   */
   boolean hasPackageType(String packageName, String simple) throws IOException {
     String name = packageName.isEmpty() ? simple : packageName + "/" + simple;
     Boolean present = packageTypes.get(name);
     if (present == null) {
       JniClass model = classes.get(name);
-      if (model == null) { model = find(entries, name, false); }
+      if (model == null) {
+        model = find(entries, name, false);
+      }
       present = model != null && name.equals(model.name) && model.outer() == null;
       packageTypes.put(name, present);
     }
@@ -120,22 +146,30 @@ final class JniClassPath implements Closeable {
 
   private JniClass findPlatform(String name) throws IOException {
     JniClass found = find(platform, name, true);
-    if (found != null || !new File(javaHome, "lib/modules").isFile()) { return found; }
+    if (found != null || !new File(javaHome, "lib/modules").isFile()) {
+      return found;
+    }
     if (runtimeImage == null) {
       // The selected JDK's provider also works when Maven itself runs on JDK 8.
       // Never use the default jrt filesystem: it belongs to Maven's runtime JDK.
-      runtimeProvider = new URLClassLoader(new URL[] {new File(javaHome, "lib/jrt-fs.jar").toURI().toURL()}, null);
+      runtimeProvider = new URLClassLoader(new URL[] {
+          new File(javaHome, "lib/jrt-fs.jar").toURI().toURL()
+      }, null);
       runtimeImage = FileSystems.newFileSystem(URI.create("jrt:/"),
           Collections.singletonMap("java.home", javaHome.getAbsolutePath()), runtimeProvider);
       try (DirectoryStream<Path> stream = Files.newDirectoryStream(runtimeImage.getPath("/modules"))) {
-        for (Path module : stream) { modules.add(module); }
+        for (Path module : stream) {
+          modules.add(module);
+        }
       }
       Collections.sort(modules);
     }
     for (Path module : modules) {
       Path file = module.resolve(name + ".class");
       if (Files.isRegularFile(file)) {
-        try (InputStream in = Files.newInputStream(file)) { return read(in, true); }
+        try (InputStream in = Files.newInputStream(file)) {
+          return read(in, true);
+        }
       }
     }
     return null;
@@ -143,8 +177,15 @@ final class JniClassPath implements Closeable {
 
   @Override
   public void close() throws IOException {
-    try { if (runtimeImage != null) { runtimeImage.close(); } }
-    finally { if (runtimeProvider != null) { runtimeProvider.close(); } }
+    try {
+      if (runtimeImage != null) {
+        runtimeImage.close();
+      }
+    } finally {
+      if (runtimeProvider != null) {
+        runtimeProvider.close();
+      }
+    }
   }
 
   private JniClass find(List<File> paths, String name, boolean isPlatform) throws IOException {
@@ -153,11 +194,15 @@ final class JniClassPath implements Closeable {
 
   private JniClass find(List<File> paths, String name, boolean isPlatform, Set<File> visited) throws IOException {
     for (File path : paths) {
-      if (!visited.add(path.getCanonicalFile())) { continue; }
+      if (!visited.add(path.getCanonicalFile())) {
+        continue;
+      }
       if (path.isDirectory()) {
         File file = new File(path, name + ".class");
         if (file.isFile()) {
-          try (InputStream in = Files.newInputStream(file.toPath())) { return read(in, isPlatform); }
+          try (InputStream in = Files.newInputStream(file.toPath())) {
+            return read(in, isPlatform);
+          }
         }
       } else if (path.isFile()) {
         Manifest attributes = null;
@@ -166,22 +211,31 @@ final class JniClassPath implements Closeable {
           ZipEntry entry = zip.getEntry(resource);
           ZipEntry manifest = zip.getEntry("META-INF/MANIFEST.MF");
           if (!isPlatform && manifest != null) {
-            try (InputStream in = zip.getInputStream(manifest)) { attributes = new Manifest(in); }
+            try (InputStream in = zip.getInputStream(manifest)) {
+              attributes = new Manifest(in);
+            }
             if (release >= 9 && "true".equalsIgnoreCase(attributes.getMainAttributes().getValue("Multi-Release"))) {
               for (int version = release; version >= 9; version--) {
                 ZipEntry candidate = zip.getEntry("META-INF/versions/" + version + "/" + resource);
-                if (candidate != null) { entry = candidate; break; }
+                if (candidate != null) {
+                  entry = candidate;
+                  break;
+                }
               }
             }
           }
           if (entry != null) {
-            try (InputStream in = zip.getInputStream(entry)) { return read(in, isPlatform); }
+            try (InputStream in = zip.getInputStream(entry)) {
+              return read(in, isPlatform);
+            }
           }
         }
         // Manifest entries immediately follow their containing JAR, including
         // transitive entries. Share visited paths across the complete search.
         JniClass found = find(manifestPaths(path, attributes), name, false, visited);
-        if (found != null) { return found; }
+        if (found != null) {
+          return found;
+        }
       }
     }
     return null;
@@ -190,7 +244,9 @@ final class JniClassPath implements Closeable {
   private List<File> manifestPaths(File path, Manifest attributes) throws IOException {
     List<File> dependencies = new ArrayList<File>();
     String classPath = attributes == null ? null : attributes.getMainAttributes().getValue("Class-Path");
-    if (classPath == null) { return dependencies; }
+    if (classPath == null) {
+      return dependencies;
+    }
     StringTokenizer tokens = new StringTokenizer(classPath);
     while (tokens.hasMoreTokens()) {
       String token = tokens.nextToken();
@@ -203,7 +259,9 @@ final class JniClassPath implements Closeable {
       try {
         URI entry = new URL(path.toURI().toURL(), token).toURI();
         if (!entry.isOpaque() && "file".equalsIgnoreCase(entry.getScheme()) && entry.getAuthority() == null
-            && entry.getQuery() == null && entry.getFragment() == null) { dependencies.add(new File(entry)); }
+            && entry.getQuery() == null && entry.getFragment() == null) {
+          dependencies.add(new File(entry));
+        }
       } catch (MalformedURLException | URISyntaxException ex) {
         // Invalid or remote manifest URLs are not application metadata sources.
       }
@@ -211,24 +269,32 @@ final class JniClassPath implements Closeable {
     return dependencies;
   }
 
-  /** Candidate qualifiers only: full member/access checks are done by the caller. */
+  /**
+   * Candidate qualifiers only: full member/access checks are done by the caller.
+   */
   Set<String> subtypes(String name, boolean discover) throws IOException {
     if (discover && hierarchyHeaders == null) {
       hierarchyHeaders = new HashMap<String, List<String>>();
       indexHierarchy(entries, new HashSet<File>());
     }
     Map<String, List<String>> headers = new HashMap<String, List<String>>();
-    if (hierarchyHeaders != null) { headers.putAll(hierarchyHeaders); }
+    if (hierarchyHeaders != null) {
+      headers.putAll(hierarchyHeaders);
+    }
     // Project definitions and normally resolved classes retain lookup precedence.
     for (JniClass model : classes.values()) {
       List<String> parents = new ArrayList<String>(model.interfaces);
-      if (model.parent != null) { parents.add(model.parent); }
+      if (model.parent != null) {
+        parents.add(model.parent);
+      }
       headers.put(model.name, parents);
     }
     Map<String, Set<String>> children = new HashMap<String, Set<String>>();
     for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
       for (String parent : entry.getValue()) {
-        if (!children.containsKey(parent)) { children.put(parent, new TreeSet<String>()); }
+        if (!children.containsKey(parent)) {
+          children.put(parent, new TreeSet<String>());
+        }
         children.get(parent).add(entry.getKey());
       }
     }
@@ -237,22 +303,34 @@ final class JniClassPath implements Closeable {
     pending.add(name);
     for (int i = 0; i < pending.size(); i++) {
       Set<String> found = children.get(pending.get(i));
-      if (found == null) { continue; }
-      for (String child : found) { if (!child.equals(name) && result.add(child)) { pending.add(child); } }
+      if (found == null) {
+        continue;
+      }
+      for (String child : found) {
+        if (!child.equals(name) && result.add(child)) {
+          pending.add(child);
+        }
+      }
     }
     return result;
   }
 
   private void indexHierarchy(List<File> paths, Set<File> visited) throws IOException {
     for (File path : paths) {
-      if (!visited.add(path.getCanonicalFile())) { continue; }
+      if (!visited.add(path.getCanonicalFile())) {
+        continue;
+      }
       if (path.isDirectory()) {
         indexDirectory(path, path, new HashSet<File>());
       } else if (path.isFile()) {
         Manifest manifest = null;
         try (ZipFile zip = new ZipFile(path)) {
           ZipEntry attributes = zip.getEntry("META-INF/MANIFEST.MF");
-          if (attributes != null) { try (InputStream in = zip.getInputStream(attributes)) { manifest = new Manifest(in); } }
+          if (attributes != null) {
+            try (InputStream in = zip.getInputStream(attributes)) {
+              manifest = new Manifest(in);
+            }
+          }
           boolean multiRelease = release >= 9 && manifest != null
               && "true".equalsIgnoreCase(manifest.getMainAttributes().getValue("Multi-Release"));
           Map<String, ZipEntry> selected = new TreeMap<String, ZipEntry>();
@@ -261,25 +339,43 @@ final class JniClassPath implements Closeable {
             ZipEntry entry = all.nextElement();
             String resource = entry.getName();
             int version = 0;
-            if (path.getName().endsWith(".jmod") && resource.startsWith("classes/")) { resource = resource.substring(8); }
+            if (path.getName().endsWith(".jmod") && resource.startsWith("classes/")) {
+              resource = resource.substring(8);
+            }
             if (resource.startsWith("META-INF/versions/")) {
-              if (!multiRelease) { continue; }
+              if (!multiRelease) {
+                continue;
+              }
               int slash = resource.indexOf('/', 18);
-              if (slash < 0) { continue; }
-              try { version = Integer.parseInt(resource.substring(18, slash)); }
-              catch (NumberFormatException invalid) { continue; }
-              if (version < 9 || version > release) { continue; }
+              if (slash < 0) {
+                continue;
+              }
+              try {
+                version = Integer.parseInt(resource.substring(18, slash));
+              } catch (NumberFormatException invalid) {
+                continue;
+              }
+              if (version < 9 || version > release) {
+                continue;
+              }
               resource = resource.substring(slash + 1);
             }
-            if (!resource.endsWith(".class") || resource.startsWith("META-INF/")) { continue; }
+            if (!resource.endsWith(".class") || resource.startsWith("META-INF/")) {
+              continue;
+            }
             String name = resource.substring(0, resource.length() - 6);
             if (!versions.containsKey(name) || versions.get(name) < version) {
-              versions.put(name, version); selected.put(name, entry);
+              versions.put(name, version);
+              selected.put(name, entry);
             }
           }
           for (Map.Entry<String, ZipEntry> entry : selected.entrySet()) {
-            if (hierarchyHeaders.containsKey(entry.getKey())) { continue; }
-            try (InputStream in = zip.getInputStream(entry.getValue())) { indexHeader(entry.getKey(), in); }
+            if (hierarchyHeaders.containsKey(entry.getKey())) {
+              continue;
+            }
+            try (InputStream in = zip.getInputStream(entry.getValue())) {
+              indexHeader(entry.getKey(), in);
+            }
           }
         }
         indexHierarchy(manifestPaths(path, manifest), visited);
@@ -289,21 +385,32 @@ final class JniClassPath implements Closeable {
 
   private void indexDirectory(File root, File directory, Set<File> visiting) throws IOException {
     File canonical = directory.getCanonicalFile();
-    if (!visiting.add(canonical)) { return; }
+    if (!visiting.add(canonical)) {
+      return;
+    }
     try {
       File[] files = directory.listFiles();
-      if (files == null) { return; }
+      if (files == null) {
+        return;
+      }
       Arrays.sort(files);
       for (File file : files) {
-        if (file.isDirectory()) { indexDirectory(root, file, visiting); }
-        else if (file.getName().endsWith(".class")) {
+        if (file.isDirectory()) {
+          indexDirectory(root, file, visiting);
+        } else if (file.getName().endsWith(".class")) {
           String resource = root.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/');
           String name = resource.substring(0, resource.length() - 6);
-          if (hierarchyHeaders.containsKey(name)) { continue; }
-          try (InputStream in = Files.newInputStream(file.toPath())) { indexHeader(name, in); }
+          if (hierarchyHeaders.containsKey(name)) {
+            continue;
+          }
+          try (InputStream in = Files.newInputStream(file.toPath())) {
+            indexHeader(name, in);
+          }
         }
       }
-    } finally { visiting.remove(canonical); }
+    } finally {
+      visiting.remove(canonical);
+    }
   }
 
   private void indexHeader(String name, InputStream in) throws IOException {
@@ -313,8 +420,12 @@ final class JniClassPath implements Closeable {
     hierarchyHeaders.put(name, parents);
     try {
       ClassReader reader = new ClassReader(in);
-      if (!name.equals(reader.getClassName())) { return; }
-      if (reader.getSuperName() != null) { parents.add(reader.getSuperName()); }
+      if (!name.equals(reader.getClassName())) {
+        return;
+      }
+      if (reader.getSuperName() != null) {
+        parents.add(reader.getSuperName());
+      }
       Collections.addAll(parents, reader.getInterfaces());
     } catch (IllegalArgumentException invalid) {
       // Unrelated unsupported class versions are not required declarations.
@@ -332,12 +443,18 @@ final class JniClassPath implements Closeable {
     return model;
   }
 
-  String sourceName(String name) throws IOException { return sourceName(name, new HashSet<String>()); }
+  String sourceName(String name) throws IOException {
+    return sourceName(name, new HashSet<String>());
+  }
 
   private String sourceName(String name, Set<String> visiting) throws IOException {
     String cached = sourceNames.get(name);
-    if (cached != null) { return cached; }
-    if (!visiting.add(name)) { throw new IOException("Containment cycle involving " + name); }
+    if (cached != null) {
+      return cached;
+    }
+    if (!visiting.add(name)) {
+      throw new IOException("Containment cycle involving " + name);
+    }
     JniClass model = resolve(name);
     if (model.local || (model.nesting != null && (model.outer() == null || model.simple() == null))) {
       throw new IOException("Unsupported JNI target or required declaration: local/anonymous class " + name);
@@ -354,14 +471,17 @@ final class JniClassPath implements Closeable {
       JniClass parent = resolve(model.outer());
       String parentSource = sourceName(parent.name, visiting);
       JniClass.Member counterpart = parent.members.get(name);
-      if (!model.packageName().equals(parent.packageName())
-          || !name.equals(parent.name + "$" + model.simple())
+      if (!model.packageName().equals(parent.packageName()) || !name.equals(parent.name + "$" + model.simple())
           || (counterpart != null && !counterpart.same(model.nesting))) {
         throw new IOException("Conflicting containment metadata for " + name);
       }
       result = parentSource + "." + model.simple();
     } else {
-      for (String part : model.packageName().split("/")) { if (!part.isEmpty()) { identifier(part, name); } }
+      for (String part : model.packageName().split("/")) {
+        if (!part.isEmpty()) {
+          identifier(part, name);
+        }
+      }
       result = name.replace('/', '.');
     }
     visiting.remove(name);

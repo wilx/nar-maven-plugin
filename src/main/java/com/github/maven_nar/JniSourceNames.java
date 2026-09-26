@@ -30,23 +30,35 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
-/** Names in one generated compilation unit, independent of class-file binary names. */
+/**
+ * Names in one generated compilation unit, independent of class-file binary
+ * names.
+ */
 final class JniSourceNames {
   private final JniClassPath metadata;
   private final String root;
+
   interface Access {
     boolean visible(String name) throws IOException;
+
     Set<String> qualifiers(String member, boolean discover) throws IOException;
+
     Qualifier qualifier(String name, JniSignature.Value owner, Map<String, List<JniSignature.Value>> bounds,
-        boolean reconstruct) throws IOException;
+        boolean reconstruct)
+        throws IOException;
   }
 
   static final class Qualifier {
     final JniSignature.Value type;
     final Set<String> genericDeclarations;
-    Qualifier(JniSignature.Value type) { this(type, Collections.<String>emptySet()); }
+
+    Qualifier(JniSignature.Value type) {
+      this(type, Collections.<String> emptySet());
+    }
+
     Qualifier(JniSignature.Value type, Set<String> genericDeclarations) {
-      this.type = type; this.genericDeclarations = genericDeclarations;
+      this.type = type;
+      this.genericDeclarations = genericDeclarations;
     }
   }
 
@@ -88,26 +100,38 @@ final class JniSourceNames {
   void use(JniSourceNames source) {
     bindings = source.bindings;
     access = source.access;
-    typeVariables.clear(); typeVariables.addAll(source.typeVariables);
-    formalBounds.clear(); formalBounds.putAll(source.formalBounds);
-    references.clear(); references.addAll(source.references);
-    genericDeclarations.clear(); genericDeclarations.addAll(source.genericDeclarations);
+    typeVariables.clear();
+    typeVariables.addAll(source.typeVariables);
+    formalBounds.clear();
+    formalBounds.putAll(source.formalBounds);
+    references.clear();
+    references.addAll(source.references);
+    genericDeclarations.clear();
+    genericDeclarations.addAll(source.genericDeclarations);
     collecting = source.collecting;
-    unnamedTypes.clear(); unnamedTypes.addAll(source.unnamedTypes);
-    unqualified.clear(); unqualified.addAll(source.unqualified);
-    qualifiedPrefixes.clear(); qualifiedPrefixes.addAll(source.qualifiedPrefixes);
-    imports.clear(); imports.putAll(source.imports);
+    unnamedTypes.clear();
+    unnamedTypes.addAll(source.unnamedTypes);
+    unqualified.clear();
+    unqualified.addAll(source.unqualified);
+    qualifiedPrefixes.clear();
+    qualifiedPrefixes.addAll(source.qualifiedPrefixes);
+    imports.clear();
+    imports.putAll(source.imports);
   }
 
   void reserve(Set<String> types) throws IOException {
     for (String binary : types) {
       JniClass model = metadata.resolve(binary);
-      while (model.outer() != null) { model = metadata.resolve(model.outer()); }
+      while (model.outer() != null) {
+        model = metadata.resolve(model.outer());
+      }
       if (model.packageName().isEmpty()) {
         if (!collecting && imports.containsKey(model.simple())) {
-          throw new IOException("Cannot express default-package type " + binary + " beside import " + imports.get(model.simple()));
+          throw new IOException(
+              "Cannot express default-package type " + binary + " beside import " + imports.get(model.simple()));
         }
-        unqualified.add(model.simple()); unnamedTypes.add(binary);
+        unqualified.add(model.simple());
+        unnamedTypes.add(binary);
       }
     }
   }
@@ -120,34 +144,54 @@ final class JniSourceNames {
 
   void typeVariables(Iterable<String> variables) {
     typeVariables.clear();
-    for (String variable : variables) { typeVariables.add(variable); }
+    for (String variable : variables) {
+      typeVariables.add(variable);
+    }
   }
 
   void formals(JniSignature signature) {
-    formalBounds.clear(); formalBounds.putAll(signature.bounds);
+    formalBounds.clear();
+    formalBounds.putAll(signature.bounds);
   }
 
-  Set<String> boundNames() { return new HashSet<String>(bindings.keySet()); }
+  Set<String> boundNames() {
+    return new HashSet<String>(bindings.keySet());
+  }
 
-  Set<String> genericDeclarations() { return new HashSet<String>(genericDeclarations); }
+  Set<String> genericDeclarations() {
+    return new HashSet<String>(genericDeclarations);
+  }
 
-  Set<String> references() { return new HashSet<String>(references); }
+  Set<String> references() {
+    return new HashSet<String>(references);
+  }
 
   private boolean binds(String simple, String binary) {
     Set<String> visible = bindings.get(simple);
     return !typeVariables.contains(simple) && visible != null && visible.size() == 1 && visible.contains(binary);
   }
 
-  void finishCollecting() { collecting = false; }
+  void finishCollecting() {
+    collecting = false;
+  }
 
-  Set<String> imports() { return new TreeSet<String>(imports.values()); }
+  Set<String> imports() {
+    return new TreeSet<String>(imports.values());
+  }
 
-  String name(String binary) throws IOException { return name(binary, new HashSet<String>()); }
+  String name(String binary) throws IOException {
+    return name(binary, new HashSet<String>());
+  }
 
   private String name(String binary, Set<String> visiting) throws IOException {
-    if (!visiting.add(binary)) { throw new IOException("Cyclic source qualification for " + binary); }
-    try { return spelling(binary, visiting); }
-    finally { visiting.remove(binary); }
+    if (!visiting.add(binary)) {
+      throw new IOException("Cyclic source qualification for " + binary);
+    }
+    try {
+      return spelling(binary, visiting);
+    } finally {
+      visiting.remove(binary);
+    }
   }
 
   private String spelling(String binary, Set<String> visiting) throws IOException {
@@ -155,13 +199,17 @@ final class JniSourceNames {
     int dot = qualified.indexOf('.');
     // Reserve unnamed-package roots before choosing imports for any declaration.
     reserve(Collections.singleton(binary));
-    if (collecting) { return qualified; }
+    if (collecting) {
+      return qualified;
+    }
     if (dot < 0) {
       if (typeVariables.contains(qualified) || (bindings.containsKey(qualified) && !binds(qualified, binary))) {
-        throw new IOException("Cannot express type " + binary + ": lexical name " + qualified
-            + " binds to " + bindings.get(qualified) + " in " + root);
+        throw new IOException("Cannot express type " + binary + ": lexical name " + qualified + " binds to "
+            + bindings.get(qualified) + " in " + root);
       }
-      if (!access.visible(binary)) { throw new IOException("Inaccessible source type " + binary + " in " + root); }
+      if (!access.visible(binary)) {
+        throw new IOException("Inaccessible source type " + binary + " in " + root);
+      }
       return qualified;
     }
     List<JniClass> chain = new ArrayList<JniClass>();
@@ -174,7 +222,9 @@ final class JniSourceNames {
         return model.simple() + qualified.substring(metadata.sourceName(model.name).length());
       }
       visible &= access.visible(model.name);
-      if (model.outer() == null) { break; }
+      if (model.outer() == null) {
+        break;
+      }
       model = metadata.resolve(model.outer());
     }
     String first = qualified.substring(0, dot);
@@ -194,12 +244,19 @@ final class JniSourceNames {
         int flags = candidate.nesting == null ? candidate.access : candidate.nesting.access;
         importable &= (flags & org.objectweb.asm.Opcodes.ACC_PUBLIC) != 0
             || ((flags & org.objectweb.asm.Opcodes.ACC_PRIVATE) == 0 && packageName.equals(candidate.packageName()));
-        if (!importable || candidate.packageName().isEmpty()) { continue; }
+        if (!importable || candidate.packageName().isEmpty()) {
+          continue;
+        }
         String canonical = metadata.sourceName(candidate.name);
         String simple = candidate.simple();
-        if (typeVariables.contains(simple) || bindings.containsKey(simple) || unqualified.contains(simple) || qualifiedPrefixes.contains(simple)) { continue; }
+        if (typeVariables.contains(simple) || bindings.containsKey(simple) || unqualified.contains(simple)
+            || qualifiedPrefixes.contains(simple)) {
+          continue;
+        }
         String existing = imports.get(simple);
-        if (existing != null && !existing.equals(canonical)) { continue; }
+        if (existing != null && !existing.equals(canonical)) {
+          continue;
+        }
         imports.put(simple, canonical);
         return simple + qualified.substring(canonical.length());
       }
@@ -208,49 +265,68 @@ final class JniSourceNames {
     // identity through candidate subtypes; shadowing or ambiguous inheritance
     // must never silently change the native descriptor. Search cached metadata
     // first, and discover classpath hierarchy headers only if that is insufficient.
-    for (boolean discover : new boolean[] {false, true}) {
+    for (boolean discover : new boolean[] {
+        false, true
+    }) {
       for (JniClass member : chain) {
-        if (!access.visible(member.name)) { break; }
-        if (member.outer() == null) { continue; }
+        if (!access.visible(member.name)) {
+          break;
+        }
+        if (member.outer() == null) {
+          continue;
+        }
         for (String qualifier : access.qualifiers(member.name, discover)) {
           JniSourceNames trial = copy();
           try {
             String prefix = trial.name(qualifier, visiting);
             trial.references.add(qualifier);
             use(trial);
-            return prefix + "." + member.simple()
-                + qualified.substring(metadata.sourceName(member.name).length());
+            return prefix + "." + member.simple() + qualified.substring(metadata.sourceName(member.name).length());
           } catch (IOException unusable) {
             // Imports and references belong only to the successful spelling.
           }
         }
       }
     }
-    throw new IOException("Cannot express type " + binary + " without inaccessible qualifiers or source-name shadowing in " + root);
+    throw new IOException(
+        "Cannot express type " + binary + " without inaccessible qualifiers or source-name shadowing in " + root);
   }
 
-  /** Resolve the member and its owner together, preferring an exact generic instantiation. */
+  /**
+   * Resolve the member and its owner together, preferring an exact generic
+   * instantiation.
+   */
   String member(JniSignature.Value value) throws IOException {
     String key = value.toString();
-    if (!memberVisits.add(key)) { throw new IOException("Cyclic parameterized qualification for " + value.name); }
+    if (!memberVisits.add(key)) {
+      throw new IOException("Cyclic parameterized qualification for " + value.name);
+    }
     try {
       JniClass model = metadata.resolve(value.name);
       JniSourceNames direct = copy();
       try {
         String text = value.owner.source(metadata, direct) + "." + model.simple();
-        if (!collecting && !access.visible(value.name)) { throw new IOException("Inaccessible member " + value.name); }
+        if (!collecting && !access.visible(value.name)) {
+          throw new IOException("Inaccessible member " + value.name);
+        }
         use(direct);
         return text;
       } catch (IOException inaccessibleOwner) {
         // Exhaust exact qualifiers before retaining a generated qualifier's
         // generics to reconcile the source batch with its dependency contracts.
-        for (boolean reconstruct : new boolean[] {false, true}) {
-          for (boolean discover : new boolean[] {false, true}) {
+        for (boolean reconstruct : new boolean[] {
+            false, true
+        }) {
+          for (boolean discover : new boolean[] {
+              false, true
+          }) {
             for (String qualifier : access.qualifiers(value.name, discover)) {
               JniSourceNames trial = copy();
               try {
                 Qualifier selected = access.qualifier(qualifier, value.owner, formalBounds, reconstruct);
-                if (selected == null || !access.visible(value.name)) { continue; }
+                if (selected == null || !access.visible(value.name)) {
+                  continue;
+                }
                 String text = selected.type.source(metadata, trial) + "." + model.simple();
                 selected.type.classNames(trial.references);
                 trial.genericDeclarations.addAll(selected.genericDeclarations);
@@ -264,27 +340,41 @@ final class JniSourceNames {
         }
         throw new IOException("Cannot express parameterized member " + value + " in " + root, inaccessibleOwner);
       }
-    } finally { memberVisits.remove(key); }
+    } finally {
+      memberVisits.remove(key);
+    }
   }
 
-  /** Preflight actual spellings before allocating formals, including discovered aliases. */
+  /**
+   * Preflight actual spellings before allocating formals, including discovered
+   * aliases.
+   */
   Set<String> signatureNames(JniSignature signature, List<String> additionalTypes) throws IOException {
     Set<String> result = new HashSet<String>();
     List<JniSignature.Value> values = new ArrayList<JniSignature.Value>();
-    for (List<JniSignature.Value> bounds : signature.bounds.values()) { values.addAll(bounds); }
+    for (List<JniSignature.Value> bounds : signature.bounds.values()) {
+      values.addAll(bounds);
+    }
     values.addAll(signature.parents);
     values.addAll(signature.parameters);
-    if (signature.result != null) { values.add(signature.result); }
+    if (signature.result != null) {
+      values.add(signature.result);
+    }
     JniSourceNames trial = copy();
     trial.formalBounds.putAll(signature.bounds);
     for (JniSignature.Value value : values) {
       identifiers(value.source(metadata, trial), result);
       Set<String> types = new HashSet<String>();
       value.classNames(types);
-      for (String type : types) { identifiers(metadata.sourceName(type), result); }
+      for (String type : types) {
+        identifiers(metadata.sourceName(type), result);
+      }
     }
-    for (String type : additionalTypes) { identifiers(trial.name(type), result); }
-    trial.formalBounds.clear(); trial.formalBounds.putAll(formalBounds);
+    for (String type : additionalTypes) {
+      identifiers(trial.name(type), result);
+    }
+    trial.formalBounds.clear();
+    trial.formalBounds.putAll(formalBounds);
     use(trial);
     return result;
   }
@@ -294,15 +384,17 @@ final class JniSourceNames {
   }
 
   Map<String, String> variables(JniSignature signature, String prefix) throws IOException {
-    return variables(signature, prefix, Collections.<String>emptyList());
+    return variables(signature, prefix, Collections.<String> emptyList());
   }
 
-  Map<String, String> variables(JniSignature signature, String prefix, List<String> additionalTypes) throws IOException {
-    return variables(signature, prefix, additionalTypes, Collections.<String>emptySet());
+  Map<String, String> variables(JniSignature signature, String prefix, List<String> additionalTypes)
+      throws IOException {
+    return variables(signature, prefix, additionalTypes, Collections.<String> emptySet());
   }
 
   Map<String, String> variables(JniSignature signature, String prefix, List<String> additionalTypes,
-      Set<String> additionalNames) throws IOException {
+      Set<String> additionalNames)
+      throws IOException {
     Set<String> reserved = new HashSet<String>(bindings.keySet());
     reserved.addAll(typeVariables);
     reserved.addAll(additionalNames);
@@ -313,7 +405,9 @@ final class JniSourceNames {
     int index = 0;
     for (String variable : signature.bounds.keySet()) {
       String fresh;
-      do { fresh = prefix + index++; } while (!reserved.add(fresh));
+      do {
+        fresh = prefix + index++;
+      } while (!reserved.add(fresh));
       result.put(variable, fresh);
     }
     return result;

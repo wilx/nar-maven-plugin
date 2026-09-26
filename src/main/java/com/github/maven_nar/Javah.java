@@ -7,9 +7,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -56,7 +56,7 @@ public class Javah {
    */
   @Parameter(defaultValue = "javah")
   private String name = "javah";
-  
+
   /**
    * Header generator: auto, javah, or javac. Auto uses javah when the selected
    * JDK provides it (normally JDK 8 and 9), otherwise javac -h (JDK 10+).
@@ -76,14 +76,14 @@ public class Javah {
    * Add boot class paths. By default none.
    */
   @Parameter
-  private List/* <File> */bootClassPaths = new ArrayList();
+  private List/* <File> */ bootClassPaths = new ArrayList();
 
   /**
    * Add class paths. By default the classDirectory directory is included and
    * all dependent classes.
    */
   @Parameter
-  private List/* <File> */classPaths = new ArrayList();
+  private List/* <File> */ classPaths = new ArrayList();
 
   /**
    * The target directory into which to generate the output.
@@ -144,21 +144,22 @@ public class Javah {
   }
 
   public final void execute() throws MojoExecutionException, MojoFailureException {
-      
+
     if (skip) {
-        this.mojo.getLog().info("javah skipped");
-        return;
-    }  
-    
+      this.mojo.getLog().info("javah skipped");
+      return;
+    }
+
     getClassDirectory().mkdirs();
     if (!"auto".equals(mode) && !"javah".equals(mode) && !"javac".equals(mode)) {
       throw new MojoExecutionException("Unknown javah.mode '" + mode + "'; expected auto, javah or javac");
     }
     Toolchain toolchain = getToolchain();
-    if ("javac".equals(mode) || ("auto".equals(mode) && "javah".equals(name)
-        && findTool(toolchain, "javah") == null)) {
+    if ("javac".equals(mode) || ("auto".equals(mode) && "javah".equals(name) && findTool(toolchain, "javah") == null)) {
       try {
-        if (!JavacHeaders.hasTargets(getClassDirectory(), getIncludes(), excludes, extraClasses)) { return; }
+        if (!JavacHeaders.hasTargets(getClassDirectory(), getIncludes(), excludes, extraClasses)) {
+          return;
+        }
       } catch (IOException ex) {
         throw new MojoExecutionException("Cannot discover JNI header targets", ex);
       }
@@ -209,8 +210,8 @@ public class Javah {
           this.mojo.getLog().info("Running " + javah + " compiler on " + files.size() + " classes...");
           final int result = NarUtil.runCommand(javah, generateArgs(files), null, null, this.mojo.getLog());
           if (result != 0) {
-            throw new MojoFailureException(javah + " failed with exit code " + result + " 0x"
-                + Integer.toHexString(result));
+            throw new MojoFailureException(
+                javah + " failed with exit code " + result + " 0x" + Integer.toHexString(result));
           }
           FileUtils.fileWrite(getTimestampDirectory() + "/" + getTimestampFile(), "");
         }
@@ -224,10 +225,10 @@ public class Javah {
     }
   }
 
-  private String[] generateArgs(final Set/* <String> */classes) throws MojoExecutionException {
+  private String[] generateArgs(final Set/* <String> */ classes) throws MojoExecutionException {
 
     final List args = new ArrayList();
-    
+
     if (!this.bootClassPaths.isEmpty()) {
       args.add("-bootclasspath");
       args.add(StringUtils.join(this.bootClassPaths.iterator(), File.pathSeparator));
@@ -286,19 +287,25 @@ public class Javah {
 
   private static List<File> asFiles(List values) {
     List<File> files = new ArrayList<File>();
-    for (Object value : values) { files.add(new File(value.toString())); }
+    for (Object value : values) {
+      files.add(new File(value.toString()));
+    }
     return files;
   }
 
   private String findTool(Toolchain toolchain, String tool) throws MojoExecutionException, MojoFailureException {
-    if (toolchain != null) { return toolchain.findTool(tool); }
+    if (toolchain != null) {
+      return toolchain.findTool(tool);
+    }
     File executable = javaHomeTool(tool);
     return executable.isFile() ? executable.getAbsolutePath() : null;
   }
 
   private File javaHomeTool(String tool) throws MojoExecutionException, MojoFailureException {
     File executable = new File(tool);
-    if (executable.isAbsolute()) { return executable; }
+    if (executable.isAbsolute()) {
+      return executable;
+    }
     File bin = new File(this.mojo.getJavaHome(this.mojo.getAOL()), "bin");
     executable = new File(bin, tool);
     if (!executable.isFile() && File.separatorChar == '\\' && !tool.endsWith(".exe")) {
@@ -309,9 +316,13 @@ public class Javah {
 
   private String getJavah() throws MojoExecutionException, MojoFailureException {
     // An explicit custom command is always legacy and is never retried with javac.
-    if (!"javah".equals(name)) { return javaHomeTool(name).getAbsolutePath(); }
+    if (!"javah".equals(name)) {
+      return javaHomeTool(name).getAbsolutePath();
+    }
     String command = findTool(getToolchain(), "javah");
-    if (command == null) { throw new MojoExecutionException("Cannot find javah in the selected JDK"); }
+    if (command == null) {
+      throw new MojoExecutionException("Cannot find javah in the selected JDK");
+    }
     return command;
   }
 

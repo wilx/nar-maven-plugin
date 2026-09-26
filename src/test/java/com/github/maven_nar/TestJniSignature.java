@@ -21,9 +21,12 @@ package com.github.maven_nar;
 
 import java.util.HashMap;
 import java.util.Map;
-import junit.framework.TestCase;
+
 import org.objectweb.asm.Opcodes;
+
 import com.github.maven_nar.JniSignature.Value;
+
+import junit.framework.TestCase;
 
 /** Binding identity must survive specialization and signature serialization. */
 public class TestJniSignature extends TestCase {
@@ -42,7 +45,9 @@ public class TestJniSignature extends TestCase {
     Map<String, Value> arguments = new HashMap<String, Value>();
     arguments.put("A", owner);
     JniClass.Method method = specialize("<T::Ljava/lang/CharSequence;>(TA;TT;)V", arguments);
-    for (JniSignature source : new JniSignature[] {method.source, JniSignature.read(method.signature)}) {
+    for (JniSignature source : new JniSignature[] {
+        method.source, JniSignature.read(method.signature)
+    }) {
       Value parameter = source.parameters.get(0);
       assertEquals("T", parameter.owner.arguments.get(0).variable);
       assertEquals("T", parameter.arguments.get(0).component.variable);
@@ -51,8 +56,9 @@ public class TestJniSignature extends TestCase {
   }
 
   public void testSpecializationReservesVariablesInRecursiveReceiverBounds() {
-    Map<String, Value> caller = JniSignature.read("<X::Ljava/lang/Comparable<TT;>;"
-        + "T:Ljava/lang/Number;:Ljava/lang/Comparable<TX;>;>Ljava/lang/Object;").variables();
+    Map<String, Value> caller = JniSignature
+        .read("<X::Ljava/lang/Comparable<TT;>;" + "T:Ljava/lang/Number;:Ljava/lang/Comparable<TX;>;>Ljava/lang/Object;")
+        .variables();
     Map<String, Value> arguments = new HashMap<String, Value>();
     arguments.put("A", caller.get("X"));
     JniClass.Method method = specialize("<T::Ljava/lang/CharSequence;>(TA;TT;)V", arguments);
@@ -66,10 +72,13 @@ public class TestJniSignature extends TestCase {
   public void testSpecializationPreservesRecursiveDependentAndThrownFormals() {
     Map<String, Value> arguments = new HashMap<String, Value>();
     arguments.put("A", JniSignature.read("<T:Ljava/lang/Number;>Ljava/lang/Object;").variables().get("T"));
-    JniClass.Method method = specialize("<T:Ljava/lang/Exception;:Ljava/lang/Comparable<TT;>;U:TT;>"
-        + "(TA;TT;TU;)TT;^TU;", arguments);
-    assertEquals("(Ljava/lang/Number;Ljava/lang/Exception;Ljava/lang/Exception;)Ljava/lang/Exception;", method.descriptor);
-    for (JniSignature source : new JniSignature[] {method.source, JniSignature.read(method.signature)}) {
+    JniClass.Method method = specialize(
+        "<T:Ljava/lang/Exception;:Ljava/lang/Comparable<TT;>;U:TT;>" + "(TA;TT;TU;)TT;^TU;", arguments);
+    assertEquals("(Ljava/lang/Number;Ljava/lang/Exception;Ljava/lang/Exception;)Ljava/lang/Exception;",
+        method.descriptor);
+    for (JniSignature source : new JniSignature[] {
+        method.source, JniSignature.read(method.signature)
+    }) {
       assertDistinctParameters(source, "T");
       String formal = source.parameters.get(1).variable;
       assertEquals(formal, source.bounds.get(formal).get(1).arguments.get(0).variable);

@@ -27,20 +27,20 @@ import java.text.SimpleDateFormat
 
 File repoDir = new File(localRepositoryPath, 'com/github/maven-nar/its/nar/it0003-jni/1.0-SNAPSHOT')
 File[] artifacts = repoDir.listFiles({ File dir, String name ->
-    name.startsWith('it0003-jni-') && name.contains('SNAPSHOT') && name.endsWith('jni.nar')
+  name.startsWith('it0003-jni-') && name.contains('SNAPSHOT') && name.endsWith('jni.nar')
 } as FilenameFilter)
 
 // Expect only one it0003-jni SNAPSHOT NAR.
 if (artifacts.length == 1) {
-    Calendar now = Calendar.getInstance()
-    Calendar tenMinsago = (Calendar) now.clone()
-    tenMinsago.add(Calendar.MINUTE, -10)
-    DateFormat formatter = new SimpleDateFormat('yyyyMMdd.HHmmss')
+  Calendar now = Calendar.getInstance()
+  Calendar tenMinsago = (Calendar) now.clone()
+  tenMinsago.add(Calendar.MINUTE, -10)
+  DateFormat formatter = new SimpleDateFormat('yyyyMMdd.HHmmss')
 
-    // Create the fake artifact.
-    File fakeArtifact = new File(repoDir,
-        artifacts[0].getName().replace('SNAPSHOT', formatter.format(now.getTime()) + '-1'))
-    fakeArtifact.createNewFile()
+  // Create the fake artifact.
+  File fakeArtifact = new File(repoDir,
+      artifacts[0].getName().replace('SNAPSHOT', formatter.format(now.getTime()) + '-1'))
+  fakeArtifact.createNewFile()
 }
 
 return true

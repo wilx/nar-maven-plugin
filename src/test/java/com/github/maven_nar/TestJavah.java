@@ -27,15 +27,17 @@ import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
+
 import javax.tools.ToolProvider;
 
-import junit.framework.TestCase;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Model;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.toolchain.Toolchain;
 import org.apache.maven.toolchain.ToolchainManager;
 import org.codehaus.plexus.util.FileUtils;
+
+import junit.framework.TestCase;
 
 /** Regression for header generation with a JDK toolchain without javah. */
 public class TestJavah extends TestCase {
@@ -53,24 +55,30 @@ public class TestJavah extends TestCase {
 
   public void testToolchainWithoutJavah() throws Exception {
     File source = new File(work, "NativeApi.java");
-    Files.write(source.toPath(), Arrays.asList(
-        "public class NativeApi { public native int call(String[] values); }"), StandardCharsets.UTF_8);
+    Files.write(source.toPath(), Arrays.asList("public class NativeApi { public native int call(String[] values); }"),
+        StandardCharsets.UTF_8);
     File classes = new File(work, "classes");
     File expected = new File(work, "expected");
     classes.mkdirs();
     expected.mkdirs();
     assertNotNull("Run this test with a JDK", ToolProvider.getSystemJavaCompiler());
-    assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null,
-        "-d", classes.getPath(), "-h", expected.getPath(), source.getPath()));
+    assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null, "-d", classes.getPath(), "-h",
+        expected.getPath(), source.getPath()));
 
     final String javac = jdkTool("javac").getAbsolutePath();
     final Toolchain toolchain = new Toolchain() {
-      public String getType() { return "jdk"; }
-      public String findTool(String tool) { return "javac".equals(tool) ? javac : null; }
+      public String getType() {
+        return "jdk";
+      }
+
+      public String findTool(String tool) {
+        return "javac".equals(tool) ? javac : null;
+      }
     };
-    ToolchainManager manager = (ToolchainManager) Proxy.newProxyInstance(
-        ToolchainManager.class.getClassLoader(), new Class<?>[] {ToolchainManager.class},
-        new InvocationHandler() {
+    ToolchainManager manager = (ToolchainManager) Proxy.newProxyInstance(ToolchainManager.class.getClassLoader(),
+        new Class<?>[] {
+            ToolchainManager.class
+        }, new InvocationHandler() {
           public Object invoke(Object proxy, Method method, Object[] arguments) {
             return "getToolchainFromBuildContext".equals(method.getName()) ? toolchain : null;
           }
@@ -89,7 +97,8 @@ public class TestJavah extends TestCase {
     set(mojo, AbstractNarMojo.class, "classesDirectory", classes);
     set(mojo, AbstractNarMojo.class, "os", System.getProperty("os.name"));
     set(mojo, AbstractNarMojo.class, "aolId", new AOL("amd64-Linux-gpp"));
-    // The selected toolchain must be authoritative, even when javaHome has no tools.
+    // The selected toolchain must be authoritative, even when javaHome has no
+    // tools.
     File emptyHome = new File(work, "empty-jdk");
     emptyHome.mkdirs();
     set(mojo, AbstractNarMojo.class, "javaHome", emptyHome);
@@ -107,7 +116,9 @@ public class TestJavah extends TestCase {
 
   static File jdkTool(String name) {
     File home = new File(System.getProperty("java.home"));
-    if ("jre".equals(home.getName())) { home = home.getParentFile(); }
+    if ("jre".equals(home.getName())) {
+      home = home.getParentFile();
+    }
     return new File(new File(home, "bin"), name + (File.separatorChar == '\\' ? ".exe" : ""));
   }
 

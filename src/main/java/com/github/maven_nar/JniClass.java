@@ -23,12 +23,16 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
-/** The small portion of a class file needed for JNI declarations. No class loading. */
+/**
+ * The small portion of a class file needed for JNI declarations. No class
+ * loading.
+ */
 final class JniClass extends ClassVisitor {
   String name;
   String parent;
@@ -45,22 +49,31 @@ final class JniClass extends ClassVisitor {
   final List<Method> instanceMethods = new ArrayList<Method>();
   final List<Method> constructors = new ArrayList<Method>();
 
-  JniClass() { super(Opcodes.ASM9); }
+  JniClass() {
+    super(Opcodes.ASM9);
+  }
 
   @Override
-  public void visit(int version, int flags, String binaryName, String signature, String superName, String[] interfaces) {
+  public void visit(int version, int flags, String binaryName, String signature, String superName,
+      String[] interfaces) {
     name = binaryName;
     parent = superName;
     this.signature = signature;
-    if (interfaces != null) { java.util.Collections.addAll(this.interfaces, interfaces); }
+    if (interfaces != null) {
+      java.util.Collections.addAll(this.interfaces, interfaces);
+    }
     access = flags;
   }
 
   @Override
-  public void visitOuterClass(String owner, String method, String descriptor) { local = true; }
+  public void visitOuterClass(String owner, String method, String descriptor) {
+    local = true;
+  }
 
   @Override
-  public void visitPermittedSubclass(String subclass) { sealed = true; }
+  public void visitPermittedSubclass(String subclass) {
+    sealed = true;
+  }
 
   @Override
   public void visitInnerClass(String binaryName, String outer, String simple, int flags) {
@@ -69,7 +82,9 @@ final class JniClass extends ClassVisitor {
     if (old != null && !old.same(entry)) {
       throw new IllegalArgumentException("Conflicting InnerClasses entries for " + binaryName);
     }
-    if (name.equals(binaryName)) { nesting = entry; }
+    if (name.equals(binaryName)) {
+      nesting = entry;
+    }
   }
 
   @Override
@@ -84,27 +99,59 @@ final class JniClass extends ClassVisitor {
   @Override
   public MethodVisitor visitMethod(int flags, String method, String descriptor, String signature, String[] exceptions) {
     Method entry = new Method(flags, method, descriptor, signature, null,
-        exceptions == null ? java.util.Collections.<String>emptyList() : java.util.Arrays.asList(exceptions));
-    if ((flags & (Opcodes.ACC_STATIC | Opcodes.ACC_PRIVATE)) == 0
-        && !method.startsWith("<")) { instanceMethods.add(entry); }
-    if ((flags & Opcodes.ACC_NATIVE) != 0) { natives.add(entry); }
-    if ("<init>".equals(method)) { constructors.add(entry); }
+        exceptions == null ? java.util.Collections.<String> emptyList() : java.util.Arrays.asList(exceptions));
+    if ((flags & (Opcodes.ACC_STATIC | Opcodes.ACC_PRIVATE)) == 0 && !method.startsWith("<")) {
+      instanceMethods.add(entry);
+    }
+    if ((flags & Opcodes.ACC_NATIVE) != 0) {
+      natives.add(entry);
+    }
+    if ("<init>".equals(method)) {
+      constructors.add(entry);
+    }
     return null;
   }
 
-  String outer() { return nesting == null ? null : nesting.outer; }
-  String simple() { return nesting == null ? name.substring(name.lastIndexOf('/') + 1) : nesting.simple; }
-  String packageName() { int end = name.lastIndexOf('/'); return end < 0 ? "" : name.substring(0, end); }
-  boolean isInterface() { return (access & Opcodes.ACC_INTERFACE) != 0; }
-  boolean isEnum() { return (access & Opcodes.ACC_ENUM) != 0; }
-  boolean isRecord() { return (access & Opcodes.ACC_RECORD) != 0; }
-  boolean innerInstance() { return outer() != null && (nesting.access & Opcodes.ACC_STATIC) == 0; }
+  String outer() {
+    return nesting == null ? null : nesting.outer;
+  }
+
+  String simple() {
+    return nesting == null ? name.substring(name.lastIndexOf('/') + 1) : nesting.simple;
+  }
+
+  String packageName() {
+    int end = name.lastIndexOf('/');
+    return end < 0 ? "" : name.substring(0, end);
+  }
+
+  boolean isInterface() {
+    return (access & Opcodes.ACC_INTERFACE) != 0;
+  }
+
+  boolean isEnum() {
+    return (access & Opcodes.ACC_ENUM) != 0;
+  }
+
+  boolean isRecord() {
+    return (access & Opcodes.ACC_RECORD) != 0;
+  }
+
+  boolean innerInstance() {
+    return outer() != null && (nesting.access & Opcodes.ACC_STATIC) == 0;
+  }
 
   static final class Member {
     final String outer;
     final String simple;
     final int access;
-    Member(String outer, String simple, int access) { this.outer = outer; this.simple = simple; this.access = access; }
+
+    Member(String outer, String simple, int access) {
+      this.outer = outer;
+      this.simple = simple;
+      this.access = access;
+    }
+
     boolean same(Member other) {
       return java.util.Objects.equals(outer, other.outer) && java.util.Objects.equals(simple, other.simple)
           && access == other.access;
@@ -119,15 +166,24 @@ final class JniClass extends ClassVisitor {
     // Specialized source types retain bounds from enclosing generic declarations.
     final JniSignature source;
     final List<String> exceptions;
-    Method(int access, String name, String descriptor) { this(access, name, descriptor, null); }
+
+    Method(int access, String name, String descriptor) {
+      this(access, name, descriptor, null);
+    }
+
     Method(int access, String name, String descriptor, String signature) {
       this(access, name, descriptor, signature, null);
     }
+
     Method(int access, String name, String descriptor, String signature, JniSignature source) {
-      this(access, name, descriptor, signature, source, java.util.Collections.<String>emptyList());
+      this(access, name, descriptor, signature, source, java.util.Collections.<String> emptyList());
     }
+
     Method(int access, String name, String descriptor, String signature, JniSignature source, List<String> exceptions) {
-      this.access = access; this.name = name; this.descriptor = descriptor; this.signature = signature;
+      this.access = access;
+      this.name = name;
+      this.descriptor = descriptor;
+      this.signature = signature;
       this.exceptions = exceptions;
       this.source = source;
     }
@@ -135,8 +191,10 @@ final class JniClass extends ClassVisitor {
 
   static final class Field extends Method {
     final Object value;
+
     Field(int access, String name, String descriptor, Object value) {
-      super(access, name, descriptor); this.value = value;
+      super(access, name, descriptor);
+      this.value = value;
     }
   }
 }

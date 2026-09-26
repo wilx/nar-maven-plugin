@@ -20,7 +20,13 @@
 // There are no native source declarations in the consumer; all headers must
 // therefore come from the dependency's compiled classes.
 File headers = new File(basedir, 'consumer/target/nar/javah-include')
-assert headers.list().toList().sort() == ['dependency_Container_Api.h', 'dependency_Constants.h', 'dependency_GenericApi.h', 'dependency_Payload.h', 'dependency_OwnerApi.h'].sort()
+assert headers.list().toList().sort() == [
+  'dependency_Container_Api.h',
+  'dependency_Constants.h',
+  'dependency_GenericApi.h',
+  'dependency_Payload.h',
+  'dependency_OwnerApi.h'
+].sort()
 // Base's constructor type parameter java must not shadow qualified names in the generated source.
 String api = new File(headers, 'dependency_Container_Api.h').text
 assert api.contains('Java_dependency_Container_00024Api_call')

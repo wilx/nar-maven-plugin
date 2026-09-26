@@ -21,10 +21,21 @@ package dependency;
 
 public enum GenericApi implements Text, Ordered<GenericApi>, Container.Bound<Payload>, Container.Contract<String> {
   VALUE {
-    public TextList<?> boundedItems() { return null; }
-    public java.util.List<String> items() { return null; }
-    public String get() { return null; }
-    public <U extends String> U value(U input) { return null; }
+    public TextList<?> boundedItems() {
+      return null;
+    }
+
+    public java.util.List<String> items() {
+      return null;
+    }
+
+    public String get() {
+      return null;
+    }
+
+    public <U extends String> U value(U input) {
+      return null;
+    }
   };
 
   public native void call();

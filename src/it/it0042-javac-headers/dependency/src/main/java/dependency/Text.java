@@ -19,4 +19,5 @@
  */
 package dependency;
 
-public interface Text extends java.util.function.Supplier<String> {}
+public interface Text extends java.util.function.Supplier<String> {
+}

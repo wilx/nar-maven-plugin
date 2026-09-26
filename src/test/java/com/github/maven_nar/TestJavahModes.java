@@ -28,8 +28,9 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
 import javax.tools.ToolProvider;
-import junit.framework.TestCase;
+
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Model;
 import org.apache.maven.plugin.MojoExecutionException;
@@ -38,6 +39,8 @@ import org.apache.maven.project.MavenProject;
 import org.apache.maven.toolchain.Toolchain;
 import org.apache.maven.toolchain.ToolchainManager;
 import org.codehaus.plexus.util.FileUtils;
+
+import junit.framework.TestCase;
 
 public class TestJavahModes extends TestCase {
   private File work;
@@ -52,13 +55,16 @@ public class TestJavahModes extends TestCase {
     output = new File(work, "headers");
     classes.mkdirs();
     File source = new File(work, "Api.java");
-    Files.write(source.toPath(), Arrays.asList("public class Api { public native void call(); }"), StandardCharsets.UTF_8);
-    assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null,
-        "-proc:none", "-d", classes.getPath(), source.getPath()));
+    Files.write(source.toPath(), Arrays.asList("public class Api { public native void call(); }"),
+        StandardCharsets.UTF_8);
+    assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null, "-proc:none", "-d", classes.getPath(),
+        source.getPath()));
   }
 
   @Override
-  protected void tearDown() throws Exception { FileUtils.deleteDirectory(work); }
+  protected void tearDown() throws Exception {
+    FileUtils.deleteDirectory(work);
+  }
 
   public void testEmptySelectionDoesNotRequireCompiler() throws Exception {
     FileUtils.deleteDirectory(classes);
@@ -74,8 +80,8 @@ public class TestJavahModes extends TestCase {
     classes.mkdirs();
     File source = new File(work, "Plain.java");
     Files.write(source.toPath(), Arrays.asList("public class Plain {}"), StandardCharsets.UTF_8);
-    assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null,
-        "-proc:none", "-d", classes.getPath(), source.getPath()));
+    assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null, "-proc:none", "-d", classes.getPath(),
+        source.getPath()));
     configure("auto", null, noTools()).execute();
     assertFalse(output.exists());
   }
@@ -108,8 +114,13 @@ public class TestJavahModes extends TestCase {
 
   private Toolchain noTools() {
     return new Toolchain() {
-      public String getType() { return "jdk"; }
-      public String findTool(String tool) { return null; }
+      public String getType() {
+        return "jdk";
+      }
+
+      public String findTool(String tool) {
+        return null;
+      }
     };
   }
 
@@ -134,8 +145,13 @@ public class TestJavahModes extends TestCase {
 
   public void testSelectedToolchainDoesNotFallBackToJavaHome() throws Exception {
     Toolchain empty = new Toolchain() {
-      public String getType() { return "jdk"; }
-      public String findTool(String tool) { return null; }
+      public String getType() {
+        return "jdk";
+      }
+
+      public String findTool(String tool) {
+        return null;
+      }
     };
     expectFailure(configure("javac", null, empty), "Cannot find javac");
   }
@@ -149,7 +165,9 @@ public class TestJavahModes extends TestCase {
   }
 
   public void testAutomaticSelectionOfLegacyToolchain() throws Exception {
-    if (!TestJavah.jdkTool("javah").isFile()) { return; }
+    if (!TestJavah.jdkTool("javah").isFile()) {
+      return;
+    }
     Javah generator = configure("auto", null, toolchain(true));
     generator.execute();
     assertFalse(requested.contains("javac"));
@@ -165,7 +183,10 @@ public class TestJavahModes extends TestCase {
   public void testLegacyFailureDoesNotTriggerFallback() throws Exception {
     final String java = TestJavah.jdkTool("java").getAbsolutePath();
     Toolchain broken = new Toolchain() {
-      public String getType() { return "jdk"; }
+      public String getType() {
+        return "jdk";
+      }
+
       public String findTool(String tool) {
         requested.add(tool);
         return "javah".equals(tool) ? java : TestJavah.jdkTool("javac").getAbsolutePath();
@@ -177,14 +198,16 @@ public class TestJavahModes extends TestCase {
   }
 
   public void testExplicitCustomCommandIsPreserved() throws Exception {
-    // A real executable with incompatible arguments fails: no scripts or fake executables.
-    expectFailure(configure("auto", TestJavah.jdkTool("java").getAbsolutePath(), toolchain(false)),
-        "exit code");
+    // A real executable with incompatible arguments fails: no scripts or fake
+    // executables.
+    expectFailure(configure("auto", TestJavah.jdkTool("java").getAbsolutePath(), toolchain(false)), "exit code");
     assertTrue(requested.isEmpty());
   }
 
   public void testAbsoluteCustomLegacyCommand() throws Exception {
-    if (!TestJavah.jdkTool("javah").isFile()) { return; }
+    if (!TestJavah.jdkTool("javah").isFile()) {
+      return;
+    }
     configure("auto", TestJavah.jdkTool("javah").getAbsolutePath(), toolchain(false)).execute();
     assertTrue(new File(output, "Api.h").isFile());
     assertTrue(new File(output, TestJavah.jdkTool("javah").getName()).isFile());
@@ -197,7 +220,10 @@ public class TestJavahModes extends TestCase {
 
   private Toolchain toolchain(final boolean legacy) {
     return new Toolchain() {
-      public String getType() { return "jdk"; }
+      public String getType() {
+        return "jdk";
+      }
+
       public String findTool(String tool) {
         requested.add(tool);
         if ("javac".equals(tool) || (legacy && "javah".equals(tool) && TestJavah.jdkTool(tool).isFile())) {
@@ -210,9 +236,14 @@ public class TestJavahModes extends TestCase {
 
   private Javah configure(String mode, String command, final Toolchain toolchain) throws Exception {
     Model model = new Model();
-    model.setGroupId("test"); model.setArtifactId("jni"); model.setVersion("1");
-    Build build = new Build(); build.setDirectory(new File(work, "target").getPath()); model.setBuild(build);
-    MavenProject project = new MavenProject(model); project.setFile(new File(work, "pom.xml"));
+    model.setGroupId("test");
+    model.setArtifactId("jni");
+    model.setVersion("1");
+    Build build = new Build();
+    build.setDirectory(new File(work, "target").getPath());
+    model.setBuild(build);
+    MavenProject project = new MavenProject(model);
+    project.setFile(new File(work, "pom.xml"));
     NarJavahMojo mojo = new NarJavahMojo();
     TestJavah.set(mojo, AbstractNarMojo.class, "mavenProject", project);
     TestJavah.set(mojo, AbstractNarMojo.class, "classesDirectory", classes);
@@ -221,16 +252,21 @@ public class TestJavahModes extends TestCase {
     TestJavah.set(mojo, AbstractNarMojo.class, "javaHome", TestJavah.jdkTool("javac").getParentFile().getParentFile());
     if (toolchain != null) {
       ToolchainManager manager = (ToolchainManager) Proxy.newProxyInstance(ToolchainManager.class.getClassLoader(),
-          new Class<?>[] {ToolchainManager.class}, new InvocationHandler() {
+          new Class<?>[] {
+              ToolchainManager.class
+          }, new InvocationHandler() {
             public Object invoke(Object proxy, Method method, Object[] args) {
               return "getToolchainFromBuildContext".equals(method.getName()) ? toolchain : null;
             }
           });
       TestJavah.set(mojo, NarJavahMojo.class, "toolchainManager", manager);
     }
-    Javah generator = new Javah(); generator.setAbstractCompileMojo(mojo);
+    Javah generator = new Javah();
+    generator.setAbstractCompileMojo(mojo);
     TestJavah.set(generator, Javah.class, "mode", mode);
-    if (command != null) { TestJavah.set(generator, Javah.class, "name", command); }
+    if (command != null) {
+      TestJavah.set(generator, Javah.class, "name", command);
+    }
     TestJavah.set(generator, Javah.class, "classDirectory", classes);
     TestJavah.set(generator, Javah.class, "jniDirectory", output);
     TestJavah.set(generator, Javah.class, "classPaths", Arrays.asList(classes));
@@ -238,8 +274,13 @@ public class TestJavahModes extends TestCase {
   }
 
   private void expectFailure(Javah generator, String message) throws Exception {
-    try { generator.execute(); fail("Expected " + message); }
-    catch (MojoExecutionException ex) { assertTrue(ex.getMessage(), ex.getMessage().contains(message)); }
-    catch (MojoFailureException ex) { assertTrue(ex.getMessage(), ex.getMessage().contains(message)); }
+    try {
+      generator.execute();
+      fail("Expected " + message);
+    } catch (MojoExecutionException ex) {
+      assertTrue(ex.getMessage(), ex.getMessage().contains(message));
+    } catch (MojoFailureException ex) {
+      assertTrue(ex.getMessage(), ex.getMessage().contains(message));
+    }
   }
 }

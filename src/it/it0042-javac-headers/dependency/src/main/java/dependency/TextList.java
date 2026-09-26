@@ -19,4 +19,5 @@
  */
 package dependency;
 
-public class TextList<T extends CharSequence> extends java.util.ArrayList<T> {}
+public class TextList<T extends CharSequence> extends java.util.ArrayList<T> {
+}

@@ -20,7 +20,14 @@
 package dependency;
 
 public class OwnerBase {
-  public static class Owner<T> { public class Inner {} }
-  protected OwnerBase(Owner<?>.Inner value, CharSequence text) {}
-  protected <T> OwnerBase(Owner<T>.Inner value, Object text) {}
+  public static class Owner<T> {
+    public class Inner {
+    }
+  }
+
+  protected OwnerBase(Owner<?>.Inner value, CharSequence text) {
+  }
+
+  protected <T> OwnerBase(Owner<T>.Inner value, Object text) {
+  }
 }

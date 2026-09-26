@@ -20,6 +20,9 @@
 package dependency;
 
 public class OwnerApi extends OwnerBase {
-  public OwnerApi() { super((Owner<String>.Inner) null, (Object) null); }
+  public OwnerApi() {
+    super((Owner<String>.Inner) null, (Object) null);
+  }
+
   public native void call();
 }

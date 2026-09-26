@@ -19,4 +19,5 @@
  */
 package dependency;
 
-public interface Ordered<T> extends Comparable<T> {}
+public interface Ordered<T> extends Comparable<T> {
+}

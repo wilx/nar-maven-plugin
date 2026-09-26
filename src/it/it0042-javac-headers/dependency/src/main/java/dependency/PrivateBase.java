@@ -20,9 +20,18 @@
 package dependency;
 
 public class PrivateBase<T> {
-  private static class Hidden {}
-  private static class Other {}
-  protected PrivateBase(Hidden value) {}
-  protected PrivateBase(Other value) {}
-  protected PrivateBase(Hidden value, int count) {}
+  private static class Hidden {
+  }
+
+  private static class Other {
+  }
+
+  protected PrivateBase(Hidden value) {
+  }
+
+  protected PrivateBase(Other value) {
+  }
+
+  protected PrivateBase(Hidden value, int count) {
+  }
 }
