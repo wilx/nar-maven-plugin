@@ -475,6 +475,105 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testInheritedParameterizedMemberInClassHeader() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase<T> { public class Arg {} } public class PublicBase<T> extends HiddenBase<T> {}",
+        "q/Api.java", "package q; public class Api extends p.PublicBase<String> implements java.util.function.Supplier<p.PublicBase<String>.Arg> { public Arg get() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPublicParameterizedMemberControl() throws Exception {
+    compile(classes, expected,
+        "p/Base.java", "package p; public class Base<T> { public class Arg {} }",
+        "p/PublicBase.java", "package p; public class PublicBase<T> extends Base<T> {}",
+        "q/Api.java", "package q; public class Api extends p.PublicBase<String> implements java.util.function.Supplier<p.PublicBase<String>.Arg> { public Arg get() { return null; } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedMemberInSuperclassArgument() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase<T> extends HiddenBase {}",
+        "q/Api.java", "package q; public class Api extends p.PublicBase<p.PublicBase.Arg> { public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testAliasIntroducesMethodVariableShadow() throws Exception {
+    compile(classes, expected,
+        "p/Exposed.java", "package p; class Hidden { public static class Arg {} } public class Exposed extends Hidden {}",
+        "_NarMethod0.java", "public class _NarMethod0 extends p.Exposed {}",
+        "p/Left.java", "package p; public interface Left { default <T> Exposed.Arg call(T a) { return null; } }",
+        "p/Right.java", "package p; public interface Right { default <T> Exposed.Arg call(T a) { return null; } }",
+        "Api.java", "public class Api implements p.Left, p.Right { public <T> _NarMethod0.Arg call(T a) { return null; } public native void nativeCall(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testParameterizedMemberConstructorArgument() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase<T> { public class Arg {} } public class PublicBase<T> extends HiddenBase<T> {}",
+        "p/Parent.java", "package p; public class Parent { protected Parent(PublicBase<String>.Arg value) {} }",
+        "q/Api.java", "package q; public class Api extends p.Parent { public Api(p.PublicBase<String>.Arg value) { super(value); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedMemberWithGenericAlias() throws Exception {
+    compile(classes, expected,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase<T> extends HiddenBase {}",
+        "q/Api.java", "package q; public class Api { public native p.PublicBase.Arg call(p.PublicBase.Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testAliasIntroducesConstructorVariableShadow() throws Exception {
+    compile(classes, expected,
+        "p/Exposed.java", "package p; class Hidden { public interface Arg {} } public class Exposed extends Hidden {}",
+        "_NarConstructor1.java", "public class _NarConstructor1 extends p.Exposed {}",
+        "p/Parent.java", "package p; public class Parent { protected <T extends Exposed.Arg & Runnable> Parent(T a) {} }",
+        "Api.java", "public class Api extends p.Parent { public <T extends _NarConstructor1.Arg & Runnable> Api(T a) { super(a); } public native void nativeCall(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testAliasIntroducesInterfaceVariableShadow() throws Exception {
+    compile(classes, expected,
+        "p/Exposed.java", "package p; class Hidden { public interface Arg {} } public class Exposed extends Hidden {}",
+        "_NarType0.java", "public class _NarType0 extends p.Exposed {}",
+        "Outer.java", "public interface Outer<T extends _NarType0.Arg> { class Api { public native void nativeCall(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testAliasGenericMethodControl() throws Exception {
+    compile(classes, expected,
+        "p/Exposed.java", "package p; class Hidden { public static class Arg {} } public class Exposed extends Hidden {}",
+        "Alias.java", "public class Alias extends p.Exposed {}",
+        "p/Left.java", "package p; public interface Left { default <T> Exposed.Arg call(T a) { return null; } }",
+        "p/Right.java", "package p; public interface Right { default <T> Exposed.Arg call(T a) { return null; } }",
+        "Api.java", "public class Api implements p.Left, p.Right { public <T> Alias.Arg call(T a) { return null; } public native void nativeCall(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testQualifierDiscoverySkipsUnsupportedUnrelatedClass() throws Exception {
+    File dependency = directory("dependency");
+    compile(dependency, null,
+        "p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase extends HiddenBase {}",
+        "Unrelated.java", "public class Unrelated {}");
+    File future = new File(dependency, "Unrelated.class");
+    byte[] bytes = Files.readAllBytes(future.toPath());
+    bytes[6] = 0x7f; bytes[7] = (byte) 0xff;
+    Files.write(future.toPath(), bytes);
+    File jar = jar(dependency, null, false);
+    compileWithPath(classes, expected, Arrays.asList(jar),
+        "q/Api.java", "package q; public class Api { public native p.PublicBase.Arg call(); }");
+    generate(classes, Arrays.asList(classes, jar), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testNativeBindingMismatchIsRejectedBeforeCompilation() throws Exception {
     compile(classes, expected,
         "Shadow.java", "public class Shadow {}",
