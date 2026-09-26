@@ -15,6 +15,8 @@ using the standard `maven-install-plugin` and `maven-deploy-plugin`.
 Usage
 -----
 
+Building and running the plugin requires Java 8 or newer and Maven 3.6.3 or newer.
+
 In your POM:
 
 ```xml
