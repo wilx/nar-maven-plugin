@@ -125,12 +125,88 @@ public class TestLinkerReplay {
     assertEquals("legacy value", read(new File(directory, "legacy output")));
   }
 
+  @Test
+  public void testReplayPublishesMapsFromNormalAndDryRuns() throws Exception {
+    for (final String shell : new String[] {"sh", "bash"}) {
+      Assume.assumeTrue(new File("/bin/" + shell).isFile());
+      for (final boolean dry : new boolean[] {false, true}) {
+        final File working = new File(directory, shell + "-" + dry);
+        assertTrue(working.mkdir());
+        final String name = "output %,'$&.so";
+        final File output = new File(working, name);
+        final File map = new File(working, name + ".map");
+        final List<String[]> commands = record(working, name, "map contents", dry, true, new RecordingMojo().history());
+        if (dry) assertEquals("Dry-run must only record commands", 0, working.list().length);
+        Files.deleteIfExists(output.toPath());
+        Files.deleteIfExists(map.toPath());
+        final int status = execute(script(commands, shell, null), shell);
+        assertEquals(read(new File(directory, "run.log")), 0, status);
+        assertEquals("map contents", read(output));
+        assertTrue("Replay must publish the map under the final name", map.isFile());
+        assertEquals("map contents", read(map));
+        assertEquals("Temporary maps must be cleaned up", 2, working.list().length);
+      }
+    }
+  }
+
+  @Test
+  public void testReplayFailurePreservesOldMapAndRemovesTemporaryMap() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    final File map = new File(directory, "probe.map");
+    Files.write(map.toPath(), "previous map".getBytes(StandardCharsets.UTF_8));
+    final List<String[]> commands = record(directory, "probe", "FAIL", true, true, new RecordingMojo().history());
+    assertEquals(7, execute(script(commands, "sh", null), "sh"));
+    assertEquals("previous map", read(map));
+    assertNoTemporaryMaps(directory);
+  }
+
+  @Test
+  public void testReplayRejectsMissingMapAfterSuccessfulLink() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    final File map = new File(directory, "probe.map");
+    Files.write(map.toPath(), "previous map".getBytes(StandardCharsets.UTF_8));
+    final List<String[]> commands = record(directory, "probe", "MISSING", true, true, new RecordingMojo().history());
+    assertTrue(execute(script(commands, "sh", null), "sh") != 0);
+    assertEquals("previous map", read(map));
+    assertNoTemporaryMaps(directory);
+  }
+
+  @Test
+  public void testReplayHandlesMultipleOutputs() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    final List<String[]> commands = new RecordingMojo().history();
+    for (final String name : new String[] {"one", "two"}) {
+      record(directory, name, name, true, true, commands);
+    }
+    assertEquals(0, execute(script(commands, "sh", null), "sh"));
+    for (final String name : new String[] {"one", "two"}) {
+      assertTrue(new File(directory, name + ".map").isFile());
+      assertEquals(name, read(new File(directory, name + ".map")));
+    }
+    assertNoTemporaryMaps(directory);
+  }
+
+  private int execute(final File script, final String shell) throws Exception {
+    return new ProcessBuilder("/bin/" + shell, script.getAbsolutePath()).directory(directory)
+        .redirectErrorStream(true).redirectOutput(new File(directory, "run.log")).start().waitFor();
+  }
+
+  private void assertNoTemporaryMaps(final File directory) {
+    for (final String name : directory.list()) {
+      assertFalse("Temporary map remains: " + name, name.startsWith("nar-map-") && name.endsWith(".tmp"));
+    }
+  }
+
   private List<String[]> record(final File working, final String output, final String value, final boolean dry)
       throws Exception {
-    final RecordingMojo mojo = new RecordingMojo();
+    return record(working, output, value, dry, false, new RecordingMojo().history());
+  }
+
+  private List<String[]> record(final File working, final String output, final String value, final boolean dry,
+      final boolean map, final List<String[]> history) throws Exception {
     final GccLinker linker = new GccLinker(new File(System.getProperty("java.home"), "bin/java").getAbsolutePath(),
         new String[] {".o"}, new String[0], "", "", false, null);
-    linker.setCommands(mojo.history());
+    linker.setCommands(history);
     linker.setDryRun(dry);
     final CCTask task = new CCTask();
     final Project project = new Project();
@@ -139,9 +215,9 @@ public class TestLinkerReplay {
     task.setDecorateLinkerOptions(false);
     final String[] pre = {"-cp", System.getProperty("java.class.path"), Probe.class.getName(), value};
     final CommandLineLinkerConfiguration config = new CommandLineLinkerConfiguration(linker, "replay-test",
-        new String[][] {pre, new String[0]}, new ProcessorParam[0], false, false, false, new String[0], null);
+        new String[][] {pre, new String[0]}, new ProcessorParam[0], false, map, false, new String[0], null);
     linker.link(task, new File(working, output), new String[] {"object name.o"}, config);
-    return mojo.history();
+    return history;
   }
 
   private File script(final List<String[]> commands, final String shell, final Substitution sub) throws Exception {
@@ -168,8 +244,14 @@ public class TestLinkerReplay {
   public static class Probe {
     public static void main(final String[] args) throws Exception {
       final int index = Arrays.asList(args).indexOf("-o");
-      if (!"object name.o".equals(args[index + 2])) throw new IllegalArgumentException("Quoted input argument");
+      if (!"object name.o".equals(args[args.length - 1])) throw new IllegalArgumentException("Quoted input argument");
       Files.write(new File(args[index + 1]).toPath(), args[0].getBytes(StandardCharsets.UTF_8));
+      if (!"MISSING".equals(args[0])) {
+        for (final String arg : args) {
+          if (arg.startsWith("-Map=")) Files.write(new File(arg.substring(5)).toPath(), args[0].getBytes(StandardCharsets.UTF_8));
+        }
+      }
+      if ("FAIL".equals(args[0])) System.exit(7);
     }
   }
 }
