@@ -250,6 +250,67 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testNativeOverloadedOnlyByNonNativeMethod() throws Exception {
+    compile(classes, expected,"Api.java", "public class Api { public native void call(int value); public void call(String value) {} }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testUnicodeClassAndNativeMethod() throws Exception {
+    compile(classes, expected,"Api\u00e9.java", "public class Api\u00e9 { public native void m\u00e9thode(int value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testPublicMemberInheritedFromHiddenDeclaringClass() throws Exception {
+    compile(classes, expected,"p/PublicBase.java", "package p; class HiddenBase { public static class Arg {} } public class PublicBase extends HiddenBase {}",
+      "q/Api.java", "package q; public class Api extends p.PublicBase { public native Arg call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testMemberOfPrivateDeclaringClassThroughPublicParent() throws Exception {
+    compile(classes, expected,"p/Container.java", "package p; public class Container { private static class HiddenBase { public static class Arg {} } public static class PublicBase extends HiddenBase {} }",
+      "q/Api.java", "package q; public class Api extends p.Container.PublicBase { public native Arg call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testMemberInheritedFromPublicDeclaringClassControl() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { public static class Arg {} }",
+      "p/PublicBase.java", "package p; public class PublicBase extends Base {}",
+      "q/Api.java", "package q; public class Api extends p.PublicBase { public native Arg call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testMemberInheritanceThroughPackageBoundaryControl() throws Exception {
+    compile(classes, expected,"p/Base.java", "package p; public class Base { static class Arg {} }",
+      "q/Middle.java", "package q; public class Middle extends p.Base {}",
+      "p/Arg.java", "package p; public class Arg {}",
+      "p/Api.java", "package p; public class Api extends q.Middle { public native Arg call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testHiddenGrandparentMemberControl() throws Exception {
+    compile(classes, expected,"Types.java", "public interface Types { class Arg {} }",
+      "MoreTypes.java", "public interface MoreTypes extends Types { class Arg {} }",
+      "Base.java", "public class Base implements MoreTypes {}",
+      "Api.java", "public class Api extends Base { public native Arg call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testInheritedMemberDiamondControl() throws Exception {
+    compile(classes, expected,"Types.java", "public interface Types { class Arg {} }",
+      "Left.java", "public interface Left extends Types {}",
+      "Right.java", "public interface Right extends Types {}",
+      "Api.java", "public class Api implements Left, Right { public native Arg call(Arg value); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   public void testNativeBindingMismatchIsRejectedBeforeCompilation() throws Exception {
     compile(classes, expected,
         "Shadow.java", "public class Shadow {}",
