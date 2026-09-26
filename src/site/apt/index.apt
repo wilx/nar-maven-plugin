@@ -265,6 +265,14 @@ noarch area in the target directory.
  binary class. Parameterized member spellings preserve the declaring owner's type
  arguments by projecting candidate qualifiers through their generic ancestry;
  candidates must satisfy their bounds and denote the exact owner instantiation.
+ Wildcard upper bounds must permit a common subtype with the qualifier's bounds,
+ including compatible generic ancestors; wildcard lower bounds must satisfy those
+ bounds. Incompatible candidates are skipped. When a required qualifier is itself
+ generated, the generator retains its necessary class and enclosing type parameters
+ rather than erasing a member type that dependency contracts still parameterize.
+ Native signatures in these declarations retain the necessary generic source form.
+ Compiled native descriptors are checked against the original class files before
+ headers are published.
  Constructor arguments and checked exceptions use these same
  spelling rules. Qualifier discovery first uses known metadata; if necessary,
  it indexes superclass/interface names from classpath files, respecting classpath
@@ -317,7 +325,7 @@ noarch area in the target directory.
  not replace source overrides. Inherited methods are checked against the reconstructed
  superclass declarations, with generic throws clauses specialized alongside return
  and parameter types. Supporting return types satisfy both the retained superclass
- method and all retained interface contracts. Native signatures remain erased. Unrelated methods remain omitted. Required contract signature types,
+ method and all retained interface contracts. Native JVM descriptors remain unchanged. Unrelated methods remain omitted. Required contract signature types,
  including generic argument types needed by the compiler's inheritance checks, must
  be available on the classpath.
 

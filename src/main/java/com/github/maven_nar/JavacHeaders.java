@@ -56,6 +56,8 @@ final class JavacHeaders {
   private final JniClassPath metadata;
   private final Set<String> targets = new TreeSet<String>();
   private final Map<String, JniClass> declarations = new TreeMap<String, JniClass>();
+  private final Set<String> genericDeclarations = new HashSet<String>();
+  private final Map<String, Map<String, String>> classVariables = new HashMap<String, Map<String, String>>();
   private final Map<String, Constructor> constructors = new HashMap<String, Constructor>();
   private final Map<String, List<JniClass.Method>> interfaceMethods = new HashMap<String, List<JniClass.Method>>();
   private final Map<String, JniSignature> signatures = new HashMap<String, JniSignature>();
@@ -247,15 +249,16 @@ final class JavacHeaders {
   private void prepare() throws IOException {
     int previous;
     do {
-      previous = declarations.size();
+      previous = declarations.size() + genericDeclarations.size();
       sourceUnits.clear();
+      classVariables.clear();
       sourceVariables = Collections.emptyMap();
       constructors.clear();
       interfaceMethods.clear();
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) {
         for (String iface : model.interfaces) { reference(Type.getObjectType(iface)); }
         for (JniSignature.Value iface : emittedInterfaces(declarationView(model))) { reference(iface); }
-        if (model.isInterface()) {
+        if (genericDeclaration(model)) {
           for (Map.Entry<String, List<JniSignature.Value>> formal : signature(model).bounds.entrySet()) {
             metadata.identifier(formal.getKey(), model.name);
             for (JniSignature.Value bound : formal.getValue()) { reference(sourceType(bound)); }
@@ -271,11 +274,14 @@ final class JavacHeaders {
             metadata.identifier(method.name, model.name);
             reference(Type.getReturnType(method.descriptor));
             for (Type arg : Type.getArgumentTypes(method.descriptor)) { reference(arg); }
+            if (genericDeclaration(model) && method.signature != null) {
+              referenceSignature(sourceSignature(JniSignature.read(method.signature)));
+            }
           }
         }
       }
       declareReferencedMembers();
-      if (declarations.size() != previous) { continue; }
+      if (declarations.size() + genericDeclarations.size() != previous) { continue; }
       // Establish which interfaces are source stubs before resolving method
       // contracts: methods omitted from those interfaces need no implementation.
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) {
@@ -299,7 +305,7 @@ final class JavacHeaders {
         }
       }
       declareReferencedMembers();
-      if (declarations.size() != previous) { continue; }
+      if (declarations.size() + genericDeclarations.size() != previous) { continue; }
       // Reserve mandatory declarations before choosing synthetic constructors.
       // Candidates may need imports or a different checked-exception spelling;
       // neither may hide a native signature or an inherited method contract.
@@ -314,10 +320,10 @@ final class JavacHeaders {
         }
       } finally { planningDeclarations = false; }
       declareSourceNames();
-      if (declarations.size() != previous) { continue; }
+      if (declarations.size() + genericDeclarations.size() != previous) { continue; }
       for (JniClass model : new ArrayList<JniClass>(declarations.values())) { planConstructor(model); }
       declareSourceNames();
-    } while (declarations.size() != previous);
+    } while (declarations.size() + genericDeclarations.size() != previous);
   }
 
   private void planConstructor(JniClass model) throws IOException {
@@ -332,6 +338,7 @@ final class JavacHeaders {
 
   private void declareSourceNames() throws IOException {
     for (JniSourceNames names : sourceUnits.values()) {
+      genericDeclarations.addAll(names.genericDeclarations());
       for (String name : names.references()) { reference(Type.getObjectType(name)); }
     }
     declareReferencedMembers();
@@ -428,13 +435,37 @@ final class JavacHeaders {
 
   private TypeView rawView(String name) throws IOException { return view(JniSignature.Value.object(name)); }
 
+  private boolean genericDeclaration(JniClass model) {
+    return model.isInterface() || genericDeclarations.contains(model.name)
+        || (model.innerInstance() && declarations.containsKey(model.outer())
+            && genericDeclaration(declarations.get(model.outer())));
+  }
+
+  private Map<String, JniSignature.Value> declarationVariables(JniClass model) throws IOException {
+    Map<String, JniSignature.Value> variables = new HashMap<String, JniSignature.Value>();
+    if (model.innerInstance() && genericDeclaration(metadata.resolve(model.outer()))) {
+      variables.putAll(declarationVariables(metadata.resolve(model.outer())));
+    }
+    variables.putAll(signature(model).variables(variables, ""));
+    return variables;
+  }
+
+  private JniSignature declarationFormals(JniClass model) throws IOException {
+    JniSignature result = JniSignature.read(null);
+    if (model.innerInstance() && genericDeclaration(metadata.resolve(model.outer()))) {
+      result.bounds.putAll(declarationFormals(metadata.resolve(model.outer())).bounds);
+    }
+    if (genericDeclaration(model)) { result.bounds.putAll(sourceSignature(signature(model)).bounds); }
+    return result;
+  }
+
   private TypeView declarationView(JniClass model) throws IOException {
-    return model.isInterface() ? new TypeView(model, signature(model).variables(), false) : rawView(model.name);
+    return genericDeclaration(model) ? new TypeView(model, declarationVariables(model), false) : rawView(model.name);
   }
 
   private JniSignature.Value sourceType(JniSignature.Value value) {
     Set<String> raw = new HashSet<String>();
-    for (JniClass model : declarations.values()) { if (!model.isInterface()) { raw.add(model.name); } }
+    for (JniClass model : declarations.values()) { if (!genericDeclaration(model)) { raw.add(model.name); } }
     return value.eraseArguments(raw);
   }
 
@@ -506,6 +537,14 @@ final class JavacHeaders {
       }
     }
     return result;
+  }
+
+  private void referenceSignature(JniSignature signature) throws IOException {
+    for (List<JniSignature.Value> bounds : signature.bounds.values()) {
+      for (JniSignature.Value bound : bounds) { reference(bound); }
+    }
+    for (JniSignature.Value value : signature.parameters) { reference(value); }
+    if (signature.result != null) { reference(signature.result); }
   }
 
   private void reference(JniSignature.Value value) throws IOException {
@@ -850,9 +889,9 @@ final class JavacHeaders {
         JniClass type = metadata.resolve(name);
         return accessible(type.nesting == null ? type.access : type.nesting.access, type, model, false);
       }
-      public JniSignature.Value qualifier(String name, JniSignature.Value owner,
-          Map<String, List<JniSignature.Value>> bounds) throws IOException {
-        return qualifierType(name, owner, bounds);
+      public JniSourceNames.Qualifier qualifier(String name, JniSignature.Value owner,
+          Map<String, List<JniSignature.Value>> bounds, boolean reconstruct) throws IOException {
+        return qualifierType(name, owner, bounds, reconstruct);
       }
       public Set<String> qualifiers(String name, boolean discover) throws IOException {
         JniClass member = metadata.resolve(name);
@@ -877,18 +916,30 @@ final class JavacHeaders {
     return names;
   }
 
-  private JniSignature.Value qualifierType(String name, JniSignature.Value owner,
-      Map<String, List<JniSignature.Value>> bounds) throws IOException {
+  private JniSourceNames.Qualifier qualifierType(String name, JniSignature.Value owner,
+      Map<String, List<JniSignature.Value>> bounds, boolean reconstruct) throws IOException {
     boolean parameterized = false;
     for (JniSignature.Value current = owner; current != null; current = current.owner) {
       parameterized |= !current.arguments.isEmpty();
     }
-    if (!parameterized) { return JniSignature.Value.object(name); }
+    if (!parameterized) { return new JniSourceNames.Qualifier(JniSignature.Value.object(name)); }
     Set<String> variables = new HashSet<String>();
     JniSignature.Value template = qualifierTemplate(metadata.resolve(name), variables);
     JniSignature.Value projected = projectQualifier(template, owner.name, new HashSet<String>());
     Map<String, JniSignature.Value> arguments = new HashMap<String, JniSignature.Value>();
-    if (projected == null || !matchQualifier(projected, owner, variables, arguments)) { return null; }
+    if (projected == null) { return null; }
+    if (!matchQualifier(projected, owner, variables, arguments)) {
+      if (reconstruct && projected.arguments.isEmpty() && view(projected).raw) {
+        Set<String> needed = new HashSet<String>();
+        generatedQualifierPath(name, owner.name, needed, new HashSet<String>());
+        if (!needed.isEmpty()) {
+          // Retain the generated qualifier's generics in the next metadata pass.
+          // Erasing this occurrence alone breaks existing dependency contracts.
+          return new JniSourceNames.Qualifier(JniSignature.Value.object(name), needed);
+        }
+      }
+      return null;
+    }
     for (String variable : variables) {
       if (!arguments.containsKey(variable)) {
         JniSignature.Value wildcard = new JniSignature.Value();
@@ -898,13 +949,28 @@ final class JavacHeaders {
     }
     JniSignature.Value result = template.substitute(arguments);
     JniSignature.Value actual = projectQualifier(result, owner.name, new HashSet<String>());
-    return actual != null && actual.same(owner) && qualifierBounds(result, owner, bounds) ? result : null;
+    return actual != null && actual.same(owner) && qualifierBounds(result, owner, bounds)
+        ? new JniSourceNames.Qualifier(result) : null;
+  }
+
+  private void generatedQualifierPath(String name, String owner, Set<String> needed, Set<String> visited)
+      throws IOException {
+    if (!visited.add(name) || !subtype(name, owner)) { return; }
+    JniClass model = metadata.resolve(name);
+    for (JniClass scope = model; scope != null;
+        scope = scope.innerInstance() ? metadata.resolve(scope.outer()) : null) {
+      if (declarations.containsKey(scope.name) && !genericDeclaration(scope) && !signature(scope).bounds.isEmpty()) {
+        needed.add(scope.name);
+      }
+    }
+    if (model.parent != null) { generatedQualifierPath(model.parent, owner, needed, visited); }
+    for (String iface : model.interfaces) { generatedQualifierPath(iface, owner, needed, visited); }
   }
 
   private JniSignature.Value qualifierTemplate(JniClass model, Set<String> variables) throws IOException {
     JniSignature.Value result = JniSignature.Value.object(model.name);
     if (model.innerInstance()) { result.owner = qualifierTemplate(metadata.resolve(model.outer()), variables); }
-    if (!declarations.containsKey(model.name) || model.isInterface()) {
+    if (!declarations.containsKey(model.name) || genericDeclaration(model)) {
       Map<String, JniSignature.Value> enclosing = result.owner == null
           ? Collections.<String, JniSignature.Value>emptyMap() : view(result.owner).arguments;
       for (JniSignature.Value argument : signature(model).variables(enclosing, "#qualifier:" + model.name + ":").values()) {
@@ -972,9 +1038,16 @@ final class JavacHeaders {
       TypeView type = view(value);
       for (String formal : signature(type.model).bounds.keySet()) {
         JniSignature.Value argument = type.arguments.get(formal);
-        if (argument == null || argument.wildcard != '=') { continue; }
+        if (argument == null || argument.wildcard == '*') { continue; }
         for (JniSignature.Value limit : signature(type.model).bounds.get(formal)) {
-          if (!sourceSubtype(argument, limit.substitute(type.arguments), bounds, new HashSet<String>())) { return false; }
+          JniSignature.Value bound = limit.substitute(type.arguments);
+          JniSignature.Value valueBound = argument.withWildcard('=');
+          // An extends wildcard needs a possible intersection with each declared
+          // upper bound; a super wildcard's lower bound must satisfy that bound.
+          // Reuse the constructor solver's generic-ancestor overlap checks.
+          if (argument.wildcard == '+') {
+            if (!constructorResolver().overlappingBounds(valueBound, bound, bounds)) { return false; }
+          } else if (!sourceSubtype(valueBound, bound, bounds, new HashSet<String>())) { return false; }
         }
       }
     }
@@ -1197,6 +1270,8 @@ final class JavacHeaders {
     boolean retained = false;
     try {
       sourceNames = trial;
+      sourceVariables = classVariables.get(model.name);
+      sourceFormals = declarationFormals(model);
       emitConstructor(model, result, new StringBuilder(), "");
       for (String type : types) { reference(Type.getObjectType(type)); }
       sourceUnits.put(root(model).name, trial);
@@ -1233,9 +1308,12 @@ final class JavacHeaders {
     for (JniSignature.Value argument : constructor.arguments) { if (argument != null) { used.parameters.add(argument); } }
     Map<String, String> enclosingVariables = sourceVariables;
     JniSignature enclosingFormals = sourceFormals;
-    sourceFormals = used;
+    sourceFormals = JniSignature.read(null);
+    sourceFormals.bounds.putAll(enclosingFormals.bounds);
+    sourceFormals.bounds.putAll(used.bounds);
     sourceScope();
-    sourceVariables = sourceNames.variables(sourceSignature(used), "_NarConstructor", exceptions);
+    sourceVariables = new HashMap<String, String>(enclosingVariables);
+    sourceVariables.putAll(sourceNames.variables(sourceSignature(used), "_NarConstructor", exceptions));
     sourceScope();
     out.append(indent).append("  protected ");
     if (!constructor.formals.bounds.isEmpty()) { emitFormals(constructor.formals, out); out.append(' '); }
@@ -1461,26 +1539,31 @@ final class JavacHeaders {
   private void emit(JniClass model, StringBuilder out, String indent) throws IOException {
     // Formals occur in declaration clauses and the body. Reserve spellings in
     // each lexical scope before choosing names, including supporting methods.
-    sourceVariables = Collections.emptyMap();
-    sourceFormals = model.isInterface() ? sourceSignature(signature(model)) : JniSignature.read(null);
+    sourceVariables = model.innerInstance() ? new HashMap<String, String>(sourceVariables)
+        : new HashMap<String, String>();
+    sourceFormals = declarationFormals(model);
     sourceNames = names(model);
     sourceScope();
     Set<String> bodyNames = sourceNames.boundNames();
-    if (model.isInterface() && interfaceMethods.containsKey(model.name)) {
-      for (JniClass.Method method : interfaceMethods.get(model.name)) {
-        if (method.signature != null) {
-          bodyNames.addAll(sourceNames.signatureNames(sourceSignature(JniSignature.read(method.signature)), Collections.<String>emptyList()));
-        }
+    if (genericDeclaration(model)) {
+      List<JniClass.Method> methods = new ArrayList<JniClass.Method>();
+      if (interfaceMethods.containsKey(model.name)) { methods.addAll(interfaceMethods.get(model.name)); }
+      if (targets.contains(model.name)) { methods.addAll(model.natives); }
+      for (JniClass.Method method : methods) {
+        JniSignature used = JniSignature.read(method.signature == null ? method.descriptor : method.signature);
+        bodyNames.addAll(sourceNames.signatureNames(sourceSignature(used), Collections.<String>emptyList()));
       }
     }
     sourceNames = names(model, false);
-    if (model.isInterface()) {
+    if (genericDeclaration(model)) {
       JniSignature used = sourceSignature(signature(model));
       used.parents.clear();
+      if (model.parent != null) { used.parents.add(emittedSuperclass(declarationView(model))); }
       used.parents.addAll(emittedInterfaces(declarationView(model)));
-      sourceVariables = sourceNames.variables(used, "_NarType", Collections.<String>emptyList(), bodyNames);
+      sourceVariables.putAll(sourceNames.variables(used, "_NarType", Collections.<String>emptyList(), bodyNames));
     }
     sourceScope();
+    classVariables.put(model.name, new HashMap<String, String>(sourceVariables));
     out.append(indent).append(access(model.nesting == null ? model.access : model.nesting.access));
     if (model.outer() != null && (model.nesting.access & Opcodes.ACC_STATIC) != 0) { out.append("static "); }
     if (!model.isEnum() && !model.isRecord() && hasSealedParent(model)) { out.append("non-sealed "); }
@@ -1491,7 +1574,7 @@ final class JavacHeaders {
       out.append("abstract class ");
     }
     out.append(model.simple());
-    if (model.isInterface()) { emitFormals(signature(model), out); }
+    if (genericDeclaration(model)) { emitFormals(signature(model), out); }
     if (model.isRecord()) { out.append("()"); }
     if (!model.isInterface() && !model.isEnum() && !model.isRecord()
         && model.parent != null && !"java/lang/Object".equals(model.parent)) {
@@ -1515,49 +1598,10 @@ final class JavacHeaders {
       emitConstructor(model, constructors.get(model.name), out, indent);
     }
     if (interfaceMethods.containsKey(model.name)) {
-      // Keep only declarations needed by retained contracts. These must never
-      // introduce extra native methods or JNI headers.
-      for (JniClass.Method method : interfaceMethods.get(model.name)) {
-        boolean concrete = model.isEnum() || model.isRecord();
-        out.append(indent).append("  public ");
-        if (!concrete) { out.append("abstract "); }
-        JniSignature source = method.signature == null ? null : JniSignature.read(method.signature);
-        Map<String, String> classVariables = sourceVariables;
-        JniSignature classFormals = sourceFormals;
-        sourceFormals = JniSignature.read(null);
-        sourceFormals.bounds.putAll(classFormals.bounds);
-        if (source != null) { sourceFormals.bounds.putAll(sourceSignature(source).bounds); }
-        sourceVariables = new HashMap<String, String>(classVariables);
-        sourceScope();
-        if (source != null) { sourceVariables.putAll(sourceNames.variables(sourceSignature(source), "_NarMethod")); }
-        sourceScope();
-        if (source != null && !source.bounds.isEmpty()) { emitFormals(source, out); out.append(' '); }
-        out.append(source == null ? type(Type.getReturnType(method.descriptor)) : source(sourceType(source.result)))
-            .append(' ').append(method.name).append('(');
-        Type[] arguments = Type.getArgumentTypes(method.descriptor);
-        for (int i = 0; i < arguments.length; i++) {
-          if (i > 0) { out.append(", "); }
-          out.append(source == null ? type(arguments[i]) : source(sourceType(source.parameters.get(i)))).append(" p").append(i);
-        }
-        if (concrete) { out.append(") { throw new ").append(sourceNames.name("java/lang/AssertionError")).append("(); }\n"); }
-        else { out.append(");\n"); }
-        sourceVariables = classVariables;
-        sourceFormals = classFormals;
-        sourceScope();
-      }
+      for (JniClass.Method method : interfaceMethods.get(model.name)) { emitMethod(model, method, false, out, indent); }
     }
     if (targets.contains(model.name)) {
-      for (JniClass.Method method : model.natives) {
-        out.append(indent).append("  ").append(access(method.access));
-        if ((method.access & Opcodes.ACC_STATIC) != 0) { out.append("static "); }
-        out.append("native ").append(type(Type.getReturnType(method.descriptor))).append(' ').append(method.name).append('(');
-        Type[] arguments = Type.getArgumentTypes(method.descriptor);
-        for (int i = 0; i < arguments.length; i++) {
-          if (i > 0) { out.append(", "); }
-          out.append(type(arguments[i])).append(" p").append(i);
-        }
-        out.append(");\n");
-      }
+      for (JniClass.Method method : model.natives) { emitMethod(model, method, true, out, indent); }
       if (model.natives.isEmpty()) {
         String marker = "__nar_header";
         Set<String> fields = new HashSet<String>();
@@ -1572,10 +1616,48 @@ final class JavacHeaders {
         out.append(";\n");
       }
     }
+    Map<String, String> enclosingVariables = sourceVariables;
     for (JniClass child : declarations.values()) {
-      if (model.name.equals(child.outer())) { emit(child, out, indent + "  "); }
+      if (model.name.equals(child.outer())) {
+        sourceVariables = enclosingVariables;
+        emit(child, out, indent + "  ");
+      }
     }
     out.append(indent).append("}\n");
+  }
+
+  private void emitMethod(JniClass model, JniClass.Method method, boolean nativeMethod,
+      StringBuilder out, String indent) throws IOException {
+    boolean concrete = !nativeMethod && (model.isEnum() || model.isRecord());
+    out.append(indent).append("  ").append(nativeMethod ? access(method.access) : "public ");
+    if (nativeMethod) {
+      if ((method.access & Opcodes.ACC_STATIC) != 0) { out.append("static "); }
+      out.append("native ");
+    } else if (!concrete) { out.append("abstract "); }
+    JniSignature signature = method.signature == null || (nativeMethod && !genericDeclaration(model))
+        ? null : JniSignature.read(method.signature);
+    Map<String, String> enclosingVariables = sourceVariables;
+    JniSignature enclosingFormals = sourceFormals;
+    sourceFormals = JniSignature.read(null);
+    sourceFormals.bounds.putAll(enclosingFormals.bounds);
+    if (signature != null) { sourceFormals.bounds.putAll(sourceSignature(signature).bounds); }
+    sourceVariables = new HashMap<String, String>(enclosingVariables);
+    sourceScope();
+    if (signature != null) { sourceVariables.putAll(sourceNames.variables(sourceSignature(signature), "_NarMethod")); }
+    sourceScope();
+    if (signature != null && !signature.bounds.isEmpty()) { emitFormals(signature, out); out.append(' '); }
+    out.append(signature == null ? type(Type.getReturnType(method.descriptor)) : source(sourceType(signature.result)))
+        .append(' ').append(method.name).append('(');
+    Type[] arguments = Type.getArgumentTypes(method.descriptor);
+    for (int i = 0; i < arguments.length; i++) {
+      if (i > 0) { out.append(", "); }
+      out.append(signature == null ? type(arguments[i]) : source(sourceType(signature.parameters.get(i)))).append(" p").append(i);
+    }
+    if (concrete) { out.append(") { throw new ").append(sourceNames.name("java/lang/AssertionError")).append("(); }\n"); }
+    else { out.append(");\n"); }
+    sourceVariables = enclosingVariables;
+    sourceFormals = enclosingFormals;
+    sourceScope();
   }
 
   private static String access(int flags) {

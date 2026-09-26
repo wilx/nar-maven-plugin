@@ -76,6 +76,13 @@ final class JniConstructorResolver {
   private final Types types;
   JniConstructorResolver(Types types) { this.types = types; }
 
+  /** Whether two upper bounds can describe a common subtype, including generic ancestors. */
+  boolean overlappingBounds(Value left, Value right, Map<String, List<Value>> bounds) throws IOException {
+    Inference inference = new Inference(bounds, Collections.<String, List<Value>>emptyMap(), false);
+    inference.add('~', left, right);
+    return inference.solve();
+  }
+
   Candidate resolve(List<Value> arguments, Map<String, List<Value>> bounds, List<Candidate> candidates)
       throws IOException {
     Candidate call = new Candidate("arguments", arguments, bounds);
@@ -493,7 +500,11 @@ final class JniConstructorResolver {
       // Common generic ancestors must admit the same instantiation (18.3.1).
       for (Map.Entry<String, Value> entry : a.entrySet()) {
         Value x = entry.getValue(), y = b.get(entry.getKey());
-        if (y == null || x.arguments.isEmpty() || y.arguments.isEmpty()) { continue; }
+        if (y == null) { continue; }
+        // Non-static members carry enclosing arguments even without their own
+        // formals: Outer<String>.Inner and Outer<Integer>.Inner cannot overlap.
+        if (x.owner != null && y.owner != null) { add('~', x.owner, y.owner); }
+        if (x.arguments.isEmpty() || y.arguments.isEmpty()) { continue; }
         for (int i = 0; i < x.arguments.size(); i++) {
           Value u = x.arguments.get(i), v = y.arguments.get(i);
           if (u.wildcard == '=') { add('?', u, v); }

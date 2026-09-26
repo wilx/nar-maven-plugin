@@ -37,9 +37,20 @@ final class JniSourceNames {
   interface Access {
     boolean visible(String name) throws IOException;
     Set<String> qualifiers(String member, boolean discover) throws IOException;
-    JniSignature.Value qualifier(String name, JniSignature.Value owner, Map<String, List<JniSignature.Value>> bounds) throws IOException;
+    Qualifier qualifier(String name, JniSignature.Value owner, Map<String, List<JniSignature.Value>> bounds,
+        boolean reconstruct) throws IOException;
   }
 
+  static final class Qualifier {
+    final JniSignature.Value type;
+    final Set<String> genericDeclarations;
+    Qualifier(JniSignature.Value type) { this(type, Collections.<String>emptySet()); }
+    Qualifier(JniSignature.Value type, Set<String> genericDeclarations) {
+      this.type = type; this.genericDeclarations = genericDeclarations;
+    }
+  }
+
+  private final Set<String> genericDeclarations = new HashSet<String>();
   private Map<String, Set<String>> bindings;
   private Access access;
   private final Set<String> typeVariables = new HashSet<String>();
@@ -65,6 +76,7 @@ final class JniSourceNames {
     result.formalBounds.putAll(formalBounds);
     result.memberVisits.addAll(memberVisits);
     result.references.addAll(references);
+    result.genericDeclarations.addAll(genericDeclarations);
     result.collecting = collecting;
     result.unnamedTypes.addAll(unnamedTypes);
     result.unqualified.addAll(unqualified);
@@ -79,6 +91,7 @@ final class JniSourceNames {
     typeVariables.clear(); typeVariables.addAll(source.typeVariables);
     formalBounds.clear(); formalBounds.putAll(source.formalBounds);
     references.clear(); references.addAll(source.references);
+    genericDeclarations.clear(); genericDeclarations.addAll(source.genericDeclarations);
     collecting = source.collecting;
     unnamedTypes.clear(); unnamedTypes.addAll(source.unnamedTypes);
     unqualified.clear(); unqualified.addAll(source.unqualified);
@@ -115,6 +128,8 @@ final class JniSourceNames {
   }
 
   Set<String> boundNames() { return new HashSet<String>(bindings.keySet()); }
+
+  Set<String> genericDeclarations() { return new HashSet<String>(genericDeclarations); }
 
   Set<String> references() { return new HashSet<String>(references); }
 
@@ -214,7 +229,7 @@ final class JniSourceNames {
     throw new IOException("Cannot express type " + binary + " without inaccessible qualifiers or source-name shadowing in " + root);
   }
 
-  /** Resolve the member together with its instantiated owner; never erase owner arguments. */
+  /** Resolve the member and its owner together, preferring an exact generic instantiation. */
   String member(JniSignature.Value value) throws IOException {
     String key = value.toString();
     if (!memberVisits.add(key)) { throw new IOException("Cyclic parameterized qualification for " + value.name); }
@@ -227,18 +242,23 @@ final class JniSourceNames {
         use(direct);
         return text;
       } catch (IOException inaccessibleOwner) {
-        for (boolean discover : new boolean[] {false, true}) {
-          for (String qualifier : access.qualifiers(value.name, discover)) {
-            JniSourceNames trial = copy();
-            try {
-              JniSignature.Value owner = access.qualifier(qualifier, value.owner, formalBounds);
-              if (owner == null || !access.visible(value.name)) { continue; }
-              String text = owner.source(metadata, trial) + "." + model.simple();
-              owner.classNames(trial.references);
-              use(trial);
-              return text;
-            } catch (IOException unusable) {
-              // A different subtype may provide the exact owner instantiation.
+        // Exhaust exact qualifiers before retaining a generated qualifier's
+        // generics to reconcile the source batch with its dependency contracts.
+        for (boolean reconstruct : new boolean[] {false, true}) {
+          for (boolean discover : new boolean[] {false, true}) {
+            for (String qualifier : access.qualifiers(value.name, discover)) {
+              JniSourceNames trial = copy();
+              try {
+                Qualifier selected = access.qualifier(qualifier, value.owner, formalBounds, reconstruct);
+                if (selected == null || !access.visible(value.name)) { continue; }
+                String text = selected.type.source(metadata, trial) + "." + model.simple();
+                selected.type.classNames(trial.references);
+                trial.genericDeclarations.addAll(selected.genericDeclarations);
+                use(trial);
+                return text;
+              } catch (IOException unusable) {
+                // A different subtype may provide the required owner view.
+              }
             }
           }
         }
