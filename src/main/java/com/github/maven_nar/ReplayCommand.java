@@ -26,6 +26,8 @@ import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
 import org.apache.maven.plugin.MojoExecutionException;
 
@@ -96,17 +98,17 @@ public final class ReplayCommand {
     final StringBuilder command = new StringBuilder();
     boolean needsBase = false;
     for (int i = 0; i < this.arguments.length; i++) {
-      final String value = substitute(this.arguments[i], script);
+      final Argument argument = new Argument(this.arguments[i], script);
+      final String value = argument.value;
       // Only an explicitly emptied argument is removed, after every substitution has run.
       if (!this.arguments[i].isEmpty() && value.isEmpty()) {
         if (i == 0) throw new MojoExecutionException("Replay substitutions removed the executable: " + this.arguments[i]);
         continue;
       }
-      final Argument argument = new Argument(this.arguments[i], value, script);
       if (!args.isEmpty()) command.append(' ');
       args.add(value);
       command.append(argument.render(batch, i == 0));
-      needsBase |= argument.fromInvocationDirectory;
+      needsBase |= !argument.paths.isEmpty();
     }
     final String line = command.toString();
     final String temporary = this.temporaryMap.isEmpty() ? null : substitute(this.temporaryMap, script);
@@ -173,33 +175,116 @@ public final class ReplayCommand {
     writer.println("endlocal");
   }
 
-  /** A substituted value with an optional runtime directory reference, never shell text supplied by the user. */
+  /** Literal argument text with path positions kept separately until shell rendering. */
   private static final class Argument {
     private final String value;
-    private final String prefix;
-    private final boolean fromInvocationDirectory;
+    private final SortedSet<Integer> paths = new TreeSet<>();
 
-    Argument(final String original, final String value, final Script script) {
-      this.value = value;
-      final int pathStart = pathStart(original, script);
-      this.prefix = pathStart <= 0 ? "" : substitute(original.substring(0, pathStart), script);
-      this.fromInvocationDirectory = pathStart >= 0 && value.startsWith(this.prefix)
-          && !isAbsolute(value.substring(this.prefix.length()));
+    Argument(final String original, final Script script) {
+      String current = original;
+      recognizeOperand(current);
+      if (script.getSubstitutions() != null) {
+        for (final Substitution rule : script.getSubstitutions()) {
+          final List<Substitution.Replacement> edits = new ArrayList<>();
+          final boolean pathRule = "absolutePath".equals(rule.getType()) || "relativePath".equals(rule.getType());
+          final String next = rule.substitute(current, this.paths.isEmpty() && !pathRule ? null : edits);
+          if (pathRule) {
+            // Every explicit absolute path match is recognized in this rule's actual input.
+            for (final Substitution.Replacement edit : edits) {
+              if (isAbsolute(current.substring(edit.start, edit.end))) this.paths.add(edit.start);
+            }
+          }
+          final SortedSet<Integer> moved = new TreeSet<>();
+          for (final int position : this.paths) {
+            move(position, current, next, edits, moved);
+          }
+          // Lookaround captures can copy text outside the replaced interval as well.
+          for (final Substitution.Replacement edit : edits) {
+            for (final Substitution.GroupCopy copy : edit.copies) {
+              for (final int position : this.paths) {
+                if (position >= copy.start && position < copy.end) moved.add(copy.outputStart + position - copy.start);
+              }
+            }
+          }
+          this.paths.clear();
+          this.paths.addAll(moved);
+          current = next;
+          recognizeOperand(current);
+        }
+      }
+      this.value = current;
+      // Decide the base after all rules, so a path made absolute again needs no runtime prefix.
+      for (final java.util.Iterator<Integer> positions = this.paths.iterator(); positions.hasNext();) {
+        if (isAbsolute(this.value.substring(positions.next()))) positions.remove();
+      }
+    }
+
+    private void recognizeOperand(final String text) {
+      if (isAbsolute(text)) this.paths.add(0);
+      else if ((text.startsWith("-L") || text.startsWith("-F")) && isAbsolute(text.substring(2))) this.paths.add(2);
+    }
+
+    private static void move(final int position, final String before, final String after,
+        final List<Substitution.Replacement> edits, final SortedSet<Integer> moved) {
+      int shift = 0;
+      for (final Substitution.Replacement edit : edits) {
+        if (position < edit.start) break;
+        if (position < edit.end || position == edit.start) {
+          boolean copied = false;
+          for (final Substitution.GroupCopy copy : edit.copies) {
+            if (position >= copy.start && (position < copy.end || copy.start == copy.end && position == copy.start)) {
+              moved.add(copy.outputStart + position - copy.start);
+              copied = true;
+            }
+          }
+          if (copied) return;
+          // A path-prefix replacement retains its boundary, including an empty replacement.
+          if (position == edit.start) {
+            moved.add(edit.outputStart);
+            return;
+          }
+          // Preserve boundaries when a literal replacement retains part of the matched text.
+          int prefix = 0;
+          while (edit.start + prefix < edit.end && edit.outputStart + prefix < edit.outputEnd
+              && before.charAt(edit.start + prefix) == after.charAt(edit.outputStart + prefix)) prefix++;
+          if (position <= edit.start + prefix) {
+            moved.add(edit.outputStart + position - edit.start);
+            return;
+          }
+          int suffix = 0;
+          while (edit.end - suffix > edit.start && edit.outputEnd - suffix > edit.outputStart
+              && before.charAt(edit.end - suffix - 1) == after.charAt(edit.outputEnd - suffix - 1)) suffix++;
+          if (position >= edit.end - suffix) moved.add(edit.outputEnd - (edit.end - position));
+          return;
+        }
+        shift = edit.outputEnd - edit.end;
+      }
+      moved.add(position + shift);
     }
 
     String render(final boolean batch, final boolean executable) throws MojoExecutionException {
-      if (!this.fromInvocationDirectory) return batch && executable ? batchPath(this.value) : quote(this.value, batch);
-      final String relative = this.value.substring(this.prefix.length());
-      if (!batch) return quote(this.prefix, false) + "\"$_nar_replay_base\"" + quote("/" + relative, false);
-      // Windows filenames cannot contain quotes. Ordinary quote mode protects metacharacters in the
-      // runtime directory; caret-escaped quote mode would expose an expanded '&' to cmd.exe.
-      if (this.value.indexOf('"') >= 0) throw new MojoExecutionException("Invalid quote in replay path: " + this.value);
-      final StringBuilder result = new StringBuilder("\"").append(this.prefix.replace("%", "%%"))
-          .append("%_nar_replay_base%\\").append(relative.replace("%", "%%"));
-      // Escape trailing backslashes for the Windows argument parser before closing the quote.
-      for (int i = relative.length() - 1; i >= 0 && relative.charAt(i) == '\\'; i--) result.append('\\');
-      if (relative.isEmpty()) result.append('\\');
-      return result.append('"').toString();
+      if (this.paths.isEmpty()) return batch && executable ? batchPath(this.value) : quote(this.value, batch);
+      // Ordinary quote mode protects metacharacters in the expanded Windows directory.
+      if (batch && this.value.indexOf('"') >= 0) {
+        throw new MojoExecutionException("Invalid quote in replay path: " + this.value);
+      }
+      final StringBuilder result = new StringBuilder(batch ? "\"" : "");
+      int previous = 0;
+      for (final int position : this.paths) {
+        final String literal = this.value.substring(previous, position);
+        result.append(batch ? literal.replace("%", "%%") : quote(literal, false));
+        result.append(batch ? "%_nar_replay_base%\\" : "\"$_nar_replay_base\"'/'");
+        previous = position;
+      }
+      final String tail = this.value.substring(previous);
+      result.append(batch ? tail.replace("%", "%%") : quote(tail, false));
+      if (batch) {
+        // Escape trailing backslashes for the Windows argument parser before closing the quote.
+        final int length = result.length();
+        for (int i = length - 1; i >= 0 && result.charAt(i) == '\\'; i--) result.append('\\');
+        result.append('"');
+      }
+      return result.toString();
     }
   }
 
@@ -208,26 +293,6 @@ public final class ReplayCommand {
     return value.startsWith("/") || value.startsWith("\\")
         || value.length() >= 3 && Character.isLetter(value.charAt(0)) && value.charAt(1) == ':'
             && (value.charAt(2) == '/' || value.charAt(2) == '\\');
-  }
-
-  private static int pathStart(final String value, final Script script) {
-    if (isAbsolute(value)) return 0;
-    if ((value.startsWith("-L") || value.startsWith("-F")) && isAbsolute(value.substring(2))) return 2;
-    // Explicit path substitutions also identify paths embedded in other options (e.g. --script=/path).
-    if (script.getSubstitutions() != null) {
-      for (final Substitution sub : script.getSubstitutions()) {
-        if (sub.getReplace() == null) continue;
-        final String root;
-        if ("absolutePath".equals(sub.getType())) root = new File(sub.getReplace()).getAbsolutePath() + File.separator;
-        else if ("relativePath".equals(sub.getType())) root = new File(sub.getReplace()).getPath() + File.separator;
-        else continue;
-        if (isAbsolute(root)) {
-          final int index = value.indexOf(root);
-          if (index >= 0) return index;
-        }
-      }
-    }
-    return -1;
   }
 
   private static String substitute(final String value, final Script script) {

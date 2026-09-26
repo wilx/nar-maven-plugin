@@ -471,7 +471,7 @@ public class TestLinkerReplay {
   }
 
   private void checkPathSubstitutions(final String shell) throws Exception {
-    for (final String order : new String[] {"direct", "string", "regex", "later"}) {
+    for (final String order : new String[] {"direct", "string", "regex", "later", "captures"}) {
       for (final boolean map : new boolean[] {false, true}) {
         for (final boolean dry : new boolean[] {false, true}) {
           checkPathSubstitutions(shell, order, map, dry);
@@ -530,6 +530,12 @@ public class TestLinkerReplay {
       rules.add(substitution("string", "--version-script=", "--script="));
       rules.add(substitution("regex", "(second)(\\.map)", "$1-edited$2"));
     }
+    if ("captures".equals(order)) {
+      rules.add(substitution("regex", "^(-Wl,--version-script=)([^,]*)(,--version-script=)(.*)$", "$1$4$3$2"));
+      rules.add(substitution("regex", "^--repeat=(.*),(.*)$", "--repeat=$2,$1,$1"));
+      rules.add(substitution("regex", "^--mixed=(?<fixed>[^,]*),(?<moving>[^,]*),(?<local>.*)$",
+          "--mixed=${fixed},${moving},${moving},${local}"));
+    }
     final File replay = scriptWithSubstitutions(history, shell, rules);
     Files.move(original.toPath(), relocated.toPath());
     assertReplaySucceeds(replay, shell, relocated);
@@ -541,6 +547,11 @@ public class TestLinkerReplay {
         "-Wl,-rpath," + new File(relocated, "objects") + ":" + new File(relocated, "vendor") + File.separator,
         "--repeat=" + expectedFirst + "," + expectedFirst,
         "--mixed=" + unchanged + "," + expectedSecond + ",local.map");
+    if ("captures".equals(order)) {
+      expected.set(0, "-Wl," + flag + expectedSecond + "," + flag + expectedFirst);
+      expected.set(2, "--repeat=" + expectedFirst + "," + expectedFirst + "," + expectedFirst);
+      expected.set(3, "--mixed=" + unchanged + "," + expectedSecond + "," + expectedSecond + ",local.map");
+    }
     final File output = new File(relocated, "nested/output/result");
     assertEquals(encodedArguments(expected), read(output));
     assertEquals(map, new File(output.getParentFile(), "result.map").isFile());

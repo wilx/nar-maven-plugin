@@ -642,7 +642,12 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         filesystem path to a relative path, replay resolves it from the invocation directory,
         before entering the recorded linker directory. This includes executable and input paths,
         <<<-L>>>/<<<-F>>> search paths, and paths identified by explicit path substitutions.
-        Originally relative paths remain relative to the recorded linker directory.
+        Explicit path substitutions recognize every matching path in the current argument,
+        including paths introduced by earlier rules and multiple paths inside one option.
+        Later substitutions retain these path references, including paths copied by regex groups.
+        Regex rules match complete arguments; generated directory references are added only when
+        the final script is rendered. Originally relative paths remain relative to the recorded
+        linker directory.
         Existing plain-text replay logs remain supported.
 
         When linker maps are enabled, replay scripts check that linking produced a nonempty

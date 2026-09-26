@@ -36,7 +36,12 @@
         <artifactId>nar-maven-plugin</artifactId>
         <configuration>
           <skipTests>true</skipTests>
-          <linker><options><option>-g</option></options></linker>
+          <linker>
+            <options>
+              <option>-g</option>
+              <option>-Wl,--version-script=${project.basedir}/../first.map,--version-script=${project.basedir}/../second.map</option>
+            </options>
+          </linker>
           <replay>
             <scripts>
               <script>
@@ -44,7 +49,8 @@
                 <scriptType>sh</scriptType>
                 <compile>false</compile>
                 <substitutions>
-                  <substitution><type>absolutePath</type><replace>${project.basedir}</replace></substitution>
+                  <substitution><replace>${project.basedir}</replace><replaceWith>/nar-replay-project</replaceWith></substitution>
+                  <substitution><type>absolutePath</type><replace>/nar-replay-project</replace></substitution>
                   <substitution><type>regex</type><replace>^-g$</replace></substitution>
                 </substitutions>
               </script>
