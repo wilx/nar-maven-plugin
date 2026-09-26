@@ -62,7 +62,7 @@ final class SurefireGoalInvoker {
       MojoDescriptor descriptor = manager.getMojoDescriptor(plugin, "test", project.getRemotePluginRepositories(),
           session.getRepositorySession());
       MojoExecution execution = new MojoExecution(descriptor, executionId);
-      execution.setConfiguration(Xpp3Dom.mergeXpp3Dom(new Xpp3Dom(configuration), copy(descriptor.getMojoConfiguration())));
+      execution.setConfiguration(mergeConfiguration(configuration, descriptor.getMojoConfiguration()));
       manager.executeMojo(session, execution);
     } catch (MojoFailureException | MojoExecutionException e) {
       // Test failures must fail integration-test immediately, including no-test failures.
@@ -87,6 +87,27 @@ final class SurefireGoalInvoker {
     } catch (IOException e) {
       throw new MojoExecutionException("Cannot determine the NAR Surefire version", e);
     }
+  }
+
+  static Xpp3Dom mergeConfiguration(Xpp3Dom configuration, PlexusConfiguration descriptorConfiguration) {
+    Xpp3Dom result = new Xpp3Dom(configuration);
+    Xpp3Dom defaults = copy(descriptorConfiguration);
+    for (Xpp3Dom parameterDefaults : defaults.getChildren()) {
+      Xpp3Dom parameter = result.getChild(parameterDefaults.getName());
+      if (parameter == null) {
+        result.addChild(parameterDefaults);
+      } else if (parameter.getChildCount() > 0) {
+        // NAR has already resolved this collection. A descriptor expression would
+        // make Plexus use its scalar value instead of the supplied children.
+        String implementation = parameterDefaults.getAttribute("implementation");
+        if (parameter.getAttribute("implementation") == null && implementation != null) {
+          parameter.setAttribute("implementation", implementation);
+        }
+      } else {
+        Xpp3Dom.mergeXpp3Dom(parameter, parameterDefaults);
+      }
+    }
+    return result;
   }
 
   static Xpp3Dom copy(PlexusConfiguration source) {

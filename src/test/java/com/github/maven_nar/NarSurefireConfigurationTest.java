@@ -71,7 +71,7 @@ public class NarSurefireConfigurationTest {
     assertEquals("java.io.File", copied.getChild("reportsDirectory").getAttribute("implementation"));
     NarSurefireConfiguration config = new NarSurefireConfiguration();
     config.value("reportsDirectory", "/NAR reports");
-    Xpp3Dom merged = Xpp3Dom.mergeXpp3Dom(config.toDom(), copied);
+    Xpp3Dom merged = SurefireGoalInvoker.mergeConfiguration(config.toDom(), source);
     assertEquals("/NAR reports", merged.getChild("reportsDirectory").getValue());
     assertEquals("${surefire.reportsDirectory}", parameter.getValue());
     assertEquals("${project.build.directory}/surefire-reports", parameter.getAttribute("default-value"));

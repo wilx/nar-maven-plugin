@@ -106,6 +106,14 @@ boundaries are retained:
 | Toolchains | An existing JDK toolchain is honored; `jdkToolchain` can select a child JDK directly. An explicit `jvm` takes precedence. A selected toolchain promotes a zero fork count (including `0C`) to a fork. |
 | Modules | `useModulePath` defaults to false for compatibility; opt in with `nar.test.useModulePath`. |
 
+NAR's resolved collection settings take precedence when passed to Surefire.
+For example, `surefire.includes` and `surefire.excludes` cannot replace NAR's
+include/exclude patterns, `maven.test.additionalClasspath` cannot replace its
+additional classpath or appended packaged JAR, and `surefire.suiteXmlFiles`
+cannot replace a suite list configured on NAR. Descriptor defaults still apply
+to parameters NAR does not supply. The `test` selector keeps its documented
+precedence over patterns and suites.
+
 Modern Surefire may categorize provider/infrastructure errors differently from
 the old 2.6 booter when failure-ignore is enabled. NAR does not parse reports or
 catch every build failure to implement a second error policy. Use the default
