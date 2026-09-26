@@ -1984,6 +1984,108 @@ public class TestJavacHeaders extends TestCase {
     equalHeaders();
   }
 
+  public void testOnlyConstructorCanUseUncastNullBesideImport() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+      "q/Arg.java", "package q; public class Arg {}",
+      "Base.java", "public class Base { protected Base(Arg value) {} }",
+      "q.java", "import q.Arg; public class q extends Base { public q(){super(null);} public native Arg call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testDefaultPackageConstructorExceptionBesideImport() throws Exception {
+    compile(classes, expected, "Problem.java", "public class Problem extends Exception {}",
+      "q/Problem.java", "package q; public class Problem {}",
+      "Base.java", "public class Base { protected Base() throws Problem {} }",
+      "q.java", "import q.Problem; public class q extends Base { public q() throws Exception {} public native Problem call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGeneratedSuperclassNeedsAlternativeForSubclass() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}", "Throwable.java", "public class Throwable {}",
+      "Base.java", "import java.lang.Exception; public class Base { protected Base() throws Exception {} protected Base(int value) {} }",
+      "Parent.java", "public class Parent extends Base { public Parent(){super(0);} public native void parent(); }",
+      "java.java", "public class java extends Parent { public native void call(Exception e, Throwable t); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testGenericExceptionWithTwoSymbolicLowerBounds() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { protected <E extends Exception,T extends E,U extends E> Base(T a,U b) throws E {} }",
+      "Api.java", "public class Api extends Base { public Api() throws Exception { super(null,null); } public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testSeveralIndependentGenericExceptions() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { protected <E extends Exception,F extends java.io.IOException> Base() throws E,F {} }",
+      "Api.java", "public class Api extends Base { public Api() throws java.io.IOException {} public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testNestedSourceConstructorOrderControl() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { protected Base() throws java.io.IOException {} }",
+      "Owner.java", "public class Owner { public static class A extends Z { public A() throws java.io.IOException {} public native void a(); } public static class Z extends Base { public Z() throws java.io.IOException {} public native void z(); } }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testNestedDefaultPackageExceptionBesideImport() throws Exception {
+    compile(classes, expected, "Owner.java", "public class Owner { public static class Problem extends Exception {} }",
+      "q/Owner.java", "package q; public class Owner {}",
+      "Base.java", "public class Base { protected Base() throws Owner.Problem {} }",
+      "q.java", "import q.Owner; public class q extends Base { public q() throws Exception {} public native Owner call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testUncheckedInvocationErasesGenericThrows() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { private static class Hidden {} protected <E extends Exception> Base(java.util.List<Hidden> value) throws E {} }",
+      "Api.java", "public class Api extends Base { public Api(){super(null);} public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testUncheckedInvocationErasesNarrowGenericThrows() throws Exception {
+    compile(classes, expected, "Base.java", "public class Base { private static class Hidden {} protected <E extends java.io.IOException> Base(java.util.List<Hidden> value) throws E {} }",
+      "Api.java", "public class Api extends Base { public Api() throws java.io.IOException {super(null);} public native void call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+  public void testUncastNullPreservesOtherArgumentForOverloadSelection() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+        "q/Arg.java", "package q; public class Arg {}",
+        "Base.java", "public class Base { protected Base(Arg a, String b) {} protected Base(Arg a, Integer b) {} }",
+        "q.java", "import q.Arg; public class q extends Base {"
+        + " public q(){super(null,(String)null);} public native Arg call(); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
+  public void testUncastNullBesideImportsStillRejectsAmbiguity() throws Exception {
+    compile(classes, expected, "Arg.java", "public class Arg {}",
+        "Other.java", "public class Other {}",
+        "q/Arg.java", "package q; public class Arg {}",
+        "q/Other.java", "package q; public class Other {}",
+        "Factory.java", "public class Factory { public static Arg argument(){return null;} }",
+        "Base.java", "public class Base { protected Base(Arg value) {} protected Base(Other value) {} }",
+        "q.java", "import q.Arg; import q.Other; public class q extends Base {"
+        + " public q(){super(Factory.argument());} public native Arg call(Other value); }");
+    Files.createDirectories(actual.toPath());
+    File published = new File(actual, "q.h");
+    Files.write(published.toPath(), "previous header".getBytes(StandardCharsets.UTF_8));
+    failure("ambiguous constructor", Collections.<String>emptySet());
+    assertEquals("previous header", text(published));
+    assertFalse("Reject ambiguous calls before compilation", new File(work, "generated/javac.log").exists());
+  }
+
+  public void testGeneratedAncestorChoiceIncludesWideningInIntermediateClass() throws Exception {
+    compile(classes, expected, "Exception.java", "public class Exception {}",
+        "Throwable.java", "public class Throwable {}",
+        "Problem.java", "import java.lang.Exception; public class Problem extends Exception {}",
+        "q/Problem.java", "package q; public class Problem {}",
+        "Base.java", "public class Base { protected Base() throws Problem {} protected Base(int value) {} }",
+        "Parent.java", "public class Parent extends Base { public Parent(){super(0);} public native void parent(); }",
+        "q.java", "import q.Problem; public class q extends Parent { public native Problem middle(); }",
+        "java.java", "public class java extends q { public native void call(Exception e, Throwable t); }");
+    generate(classes, Arrays.asList(classes), Collections.<String>emptySet(), Collections.<String>emptySet());
+    equalHeaders();
+  }
+
   private void malformedMember(String name, String outer, String simple) throws Exception {
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null);
