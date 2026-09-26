@@ -44,9 +44,12 @@ int verifyOutputs(File directory) {
     }
     for (int i = 0; i < files.length; i++) {
         File file = files[i];
+        if (file.getName().startsWith("nar-map-") && file.getName().endsWith(".tmp")) {
+            throw new RuntimeException("Temporary map leaked: " + file);
+        }
         if (file.isDirectory()) {
             count += verifyOutputs(file);
-        } else if (file.getName().equals("libmap-probe-1.2.so") || file.getName().equals("map-probe-1.2")) {
+        } else if (file.getName().equals("libmap-probe %,-1.2.so") || file.getName().equals("map-probe %,-1.2")) {
             // BUILD SUCCESS is insufficient: the original -M bug did not produce a native output.
             if (file.length() == 0) {
                 throw new RuntimeException("Empty native output: " + file);
@@ -69,5 +72,30 @@ for (int i = 0; i < modules.length; i++) {
     if (count != 3) {
         throw new RuntimeException(modules[i] + ": expected three native outputs with maps, found " + count);
     }
+}
+// Maps must reach the published NAR, and temporary files must never be archived.
+for (int i = 0; i < modules.length; i++) {
+    File[] artifacts = new File(basedir, modules[i] + "/target").listFiles();
+    int archives = 0;
+    for (int j = 0; j < artifacts.length; j++) {
+        if (!artifacts[j].getName().endsWith(".nar")) continue;
+        java.util.zip.ZipFile archive = new java.util.zip.ZipFile(artifacts[j]);
+        try {
+            int maps = 0;
+            java.util.Enumeration entries = archive.entries();
+            while (entries.hasMoreElements()) {
+                java.util.zip.ZipEntry entry = entries.nextElement();
+                if (entry.getName().endsWith(".map")) maps++;
+                if (entry.getName().endsWith(".tmp")) {
+                    throw new RuntimeException("Temporary file archived: " + entry.getName());
+                }
+            }
+            if (maps != 1) throw new RuntimeException("Expected one map in " + artifacts[j]);
+        } finally {
+            archive.close();
+        }
+        archives++;
+    }
+    if (archives != 3) throw new RuntimeException("Expected three native NARs in " + modules[i]);
 }
 return true;

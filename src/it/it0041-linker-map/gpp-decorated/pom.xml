@@ -35,7 +35,7 @@
         <artifactId>nar-maven-plugin</artifactId>
         <extensions>true</extensions>
         <configuration>
-          <output>map-probe-1.2</output>
+          <output>map-probe %,-1.2</output>
           <decorateLinkerOptions>true</decorateLinkerOptions>
           <linker>
             <name>g++</name>

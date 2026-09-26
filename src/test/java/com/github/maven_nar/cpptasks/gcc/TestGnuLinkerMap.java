@@ -103,7 +103,7 @@ public class TestGnuLinkerMap extends TestCase {
     final List<String> args = Arrays.asList(linker.prepareArguments(task, "output", "libprobe.so",
         new String[] {"object.o", "/deps/libdependency.so"}, config));
     assertFalse(args.contains("/deps/libdependency.so"));
-    assertMapArguments(args, "-Wl,-Map=libprobe.so.map");
+    assertMapArguments(args, "-Map=libprobe.so.map");
   }
 
   public void testMapFlagChangesBuildHistoryIdentity() {
@@ -132,9 +132,65 @@ public class TestGnuLinkerMap extends TestCase {
     assertFalse(enabledId.equals(disabledId));
   }
 
+  public void testDarwinMapArgumentsForDriversAndDirectLd() {
+    for (final AbstractLdLinker linker : new AbstractLdLinker[] {
+        GccLinker.getInstance(), GppLinker.getInstance(), GccLinker.getCLangInstance(),
+        GppLinker.getCLangInstance(), LdLinker.getInstance()
+    }) {
+      for (final boolean decorate : new boolean[] {false, true}) {
+        final CCTask task = new CCTask();
+        final org.apache.tools.ant.Project project = new org.apache.tools.ant.Project();
+        project.setProperty("nar.os", "MacOSX");
+        task.setProject(project);
+        task.setDecorateLinkerOptions(decorate);
+        final List<String> args = Arrays.asList(linker.prepareArguments(task, ".", "libprobe.dylib",
+            new String[] {"object.o"}, configuration(linker, task, true, new String[0])));
+        assertTrue(args.toString(), args.contains("-map"));
+        final int index = args.indexOf("-map");
+        if (linker == LdLinker.getInstance()) {
+          assertEquals("libprobe.dylib.map", args.get(index + 1));
+          assertFalse(args.contains("-Xlinker"));
+        } else {
+          assertEquals("-Xlinker", args.get(index - 1));
+          assertEquals("-Xlinker", args.get(index + 1));
+          assertEquals("libprobe.dylib.map", args.get(index + 2));
+        }
+      }
+    }
+  }
+
+  public void testConfiguredTargetOverridesHost() {
+    final String host = System.getProperty("os.name");
+    try {
+      System.setProperty("os.name", "Mac OS X");
+      // prepare() explicitly configures a Linux target.
+      assertDriverMap(GccLinker.getInstance(), "libprobe.so");
+    } finally {
+      System.setProperty("os.name", host);
+    }
+  }
+
+  public void testOtherVendorAdaptersRetainTheirMapArguments() {
+    for (final AbstractLdLinker linker : new AbstractLdLinker[] {
+        com.github.maven_nar.cpptasks.sun.ForteCCLinker.getInstance(),
+        com.github.maven_nar.cpptasks.ibm.xlC_rLinker.getInstance()
+    }) {
+      final List<String> args = prepare(linker, "probe", true, false);
+      assertTrue(args.toString(), args.contains("-M"));
+      assertFalse(args.toString(), args.contains("-Map=probe.map"));
+    }
+  }
+
+  public void testOutputFilenameIsPassedWithoutShellQuotes() {
+    final List<String> args = prepare(GccLinker.getInstance(), "libprobe name.so", true, false);
+    assertEquals("libprobe name.so", args.get(args.indexOf("-o") + 1));
+  }
+
   private void assertDriverMap(final AbstractLdLinker linker, final String output) {
     for (final boolean decorate : new boolean[] {false, true}) {
-      assertMapArguments(prepare(linker, output, true, decorate), "-Wl,-Map=" + output + ".map");
+      final List<String> args = prepare(linker, output, true, decorate);
+      assertMapArguments(args, "-Map=" + output + ".map");
+      assertEquals("-Xlinker", args.get(args.indexOf("-Map=" + output + ".map") - 1));
     }
   }
 
@@ -153,6 +209,9 @@ public class TestGnuLinkerMap extends TestCase {
   private List<String> prepare(final AbstractLdLinker linker, final String output, final boolean map,
       final boolean decorate) {
     final CCTask task = new CCTask();
+    final org.apache.tools.ant.Project project = new org.apache.tools.ant.Project();
+    project.setProperty("nar.os", "Linux");
+    task.setProject(project);
     task.setOutfile(new File("output directory/undecorated-base"));
     task.setDecorateLinkerOptions(decorate);
     return Arrays.asList(linker.prepareArguments(task, "output directory", output, new String[] {"object.o"},

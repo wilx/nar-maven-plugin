@@ -35,7 +35,7 @@
         <artifactId>nar-maven-plugin</artifactId>
         <extensions>true</extensions>
         <configuration>
-          <output>map-probe-1.2</output>
+          <output>map-probe %,-1.2</output>
           <!-- The gcc AOL has no default C compiler or source includes. -->
           <c>
             <name>gcc</name>
