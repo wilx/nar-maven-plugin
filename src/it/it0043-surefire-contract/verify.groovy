@@ -18,7 +18,8 @@
  * #L%
  */
 // Each successful execution appends a marker, catching accidental Surefire deduplication.
-def normal = ['default', 'filtered', 'promoted', 'never', 'pertest', 'ignored-failure', 'ignored-error', 'override-excludes']
+def collectionCases = ['includes-default', 'includes-explicit', 'excludes-default', 'excludes-explicit', 'classpath-property']
+def normal = ['default', 'filtered', 'promoted', 'never', 'pertest', 'ignored-failure', 'ignored-error', 'override-excludes'] + collectionCases
 normal.each { name ->
   def expected = name == 'default' ? ['ordinary', 'first', 'second'] : ['first', 'second']
   assert new File(basedir, "results/${name}/executions").readLines('UTF-8') == expected : name
@@ -30,8 +31,11 @@ normal.each { name ->
  'invalid-jvm', 'skip-nar', 'skip-nar-tests', 'skip-nar-exec', 'skip-all', 'skip-native-plugin', 'dry-run'].each { name ->
   assert !new File(basedir, "results/${name}/executions").exists() : name
 }
-['default': [3, 0, 0, 1], 'filtered': [1, 0, 0, 0], 'failure': [3, 1, 0, 1],
- 'ignored-failure': [3, 1, 0, 1], 'error': [3, 0, 1, 1], 'ignored-error': [3, 0, 1, 1]].each { name, counts ->
+def reportCounts = ['default': [3, 0, 0, 1], 'filtered': [1, 0, 0, 0], 'failure': [3, 1, 0, 1],
+ 'ignored-failure': [3, 1, 0, 1], 'error': [3, 0, 1, 1], 'ignored-error': [3, 0, 1, 1]]
+// Counts and markers together prevent property collisions from passing with no tests.
+collectionCases.each { reportCounts[it] = [3, 0, 0, 1] }
+reportCounts.each { name, counts ->
   File report = new File(basedir, "results/${name}/reports/TEST-example.ContractTest.xml")
   assert report.isFile()
   def suite = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(report).documentElement
