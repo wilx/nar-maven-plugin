@@ -187,60 +187,63 @@ public class TestLinkerReplay {
         for (final boolean dry : new boolean[] {
             false, true
         }) {
-          final String id = shell + type + map + dry;
-          final File original = new File(directory, "list original " + id);
-          final File working = new File(original, "nested/output");
-          assertTrue(working.mkdirs());
-          final File relocated = new File(directory, "list relocated " + id + " %!&");
-          final String source = new File(directory, "search source").toString() + File.separator;
-          final String base = relocated + File.separator;
-          final String fixed = new File(directory, "fixed search").toString();
-          final List<String> payload = new ArrayList<>();
-          final List<String> expected = new ArrayList<>();
-          final List<Substitution> rules = new ArrayList<>();
-          for (final String delimiter : new String[] {
-              ":", ";"
+          for (final String option : new String[] {
+              "-rpath", "--rpath", "-rpath-link", "--rpath-link"
           }) {
-            final String input = source + "missing" + delimiter + delimiter + "relative" + delimiter + fixed + delimiter
-                + source + "lib %!&" + delimiter;
-            final String output = base + "missing" + delimiter + delimiter + "relative" + delimiter + fixed + delimiter
-                + base + "lib %!&" + delimiter;
-            for (final String option : new String[] {
-                "-rpath", "--rpath", "-rpath-link", "--rpath-link"
+            final String id = shell + type + map + dry + option;
+            final File original = new File(directory, "list original " + id);
+            final File working = new File(original, "nested/output");
+            assertTrue(working.mkdirs());
+            final File relocated = new File(directory, "list relocated " + id + " %!&");
+            final String source = new File(directory, "search source").toString() + File.separator;
+            final String base = relocated + File.separator;
+            final String fixed = new File(directory, "fixed search").toString();
+            final List<String> payload = new ArrayList<>();
+            final List<String> expected = new ArrayList<>();
+            final List<Substitution> rules = new ArrayList<>();
+            for (final String delimiter : new String[] {
+                ":", ";"
             }) {
+              final String input = source + "missing" + delimiter + delimiter + "relative" + delimiter + fixed
+                  + delimiter + source + "lib %!&" + delimiter;
+              final String output = base + "missing" + delimiter + delimiter + "relative" + delimiter + fixed
+                  + delimiter + base + "lib %!&" + delimiter;
+
               payload.addAll(Arrays.asList(option, input, "-Xlinker", option, "-Xlinker", input, option + "=" + input,
                   "-Wl," + option + "," + input, "-Wl,--as-needed," + option + "=" + input + ",--no-as-needed"));
               expected
                   .addAll(Arrays.asList(option, output, "-Xlinker", option, "-Xlinker", output, option + "=" + output,
                       "-Wl," + option + "," + output, "-Wl,--as-needed," + option + "=" + output + ",--no-as-needed"));
+
+              // A list introduced by one rule must be recognized before the next rule.
+              final String marker = "LATER_LIST_" + (":".equals(delimiter) ? "COLON" : "SEMICOLON");
+              payload.addAll(Arrays.asList("-rpath", marker));
+              expected.addAll(Arrays.asList("-rpath", output));
+              rules.add(substitution("string", marker, input));
+              // The same punctuation in a file or library directory is not list syntax.
+              for (final String prefix : new String[] {
+                  "", "-L", "-F"
+              }) {
+                payload.add(prefix + source + "first" + delimiter + source + "second");
+                expected
+                    .add(prefix + base + "first" + delimiter + ("absolutePath".equals(type) ? base : "") + "second");
+              }
             }
-            // A list introduced by one rule must be recognized before the next rule.
-            final String marker = "LATER_LIST_" + (":".equals(delimiter) ? "COLON" : "SEMICOLON");
-            payload.addAll(Arrays.asList("-rpath", marker));
-            expected.addAll(Arrays.asList("-rpath", output));
-            rules.add(substitution("string", marker, input));
-            // The same punctuation in a file or library directory is not list syntax.
-            for (final String option : new String[] {
-                "", "-L", "-F"
-            }) {
-              payload.add(option + source + "first" + delimiter + source + "second");
-              expected.add(option + base + "first" + delimiter + ("absolutePath".equals(type) ? base : "") + "second");
-            }
+            rules.add(substitution(type, "regex".equals(type) ? java.util.regex.Pattern.quote(source) : source, ""));
+            rules.add(substitution("absolutePath", original.toString(), ""));
+            final List<String[]> history = recordArguments(working, payload, dry, map);
+            assertEquals(!dry, new File(working, "result").isFile());
+            Files.deleteIfExists(new File(working, "result").toPath());
+            Files.deleteIfExists(new File(working, "result.map").toPath());
+            final File replay = scriptWithSubstitutions(history, shell, rules);
+            Files.move(original.toPath(), relocated.toPath());
+            assertReplaySucceeds(replay, shell, relocated);
+            final File output = new File(relocated, "nested/output/result");
+            assertEquals(encodedArguments(expected), read(output));
+            assertEquals(map, new File(output.getParentFile(), "result.map").isFile());
+            assertFalse(new File(relocated, "result").exists());
+            assertNoTemporaryMaps(output.getParentFile());
           }
-          rules.add(substitution(type, "regex".equals(type) ? java.util.regex.Pattern.quote(source) : source, ""));
-          rules.add(substitution("absolutePath", original.toString(), ""));
-          final List<String[]> history = recordArguments(working, payload, dry, map);
-          assertEquals(!dry, new File(working, "result").isFile());
-          Files.deleteIfExists(new File(working, "result").toPath());
-          Files.deleteIfExists(new File(working, "result.map").toPath());
-          final File replay = scriptWithSubstitutions(history, shell, rules);
-          Files.move(original.toPath(), relocated.toPath());
-          assertReplaySucceeds(replay, shell, relocated);
-          final File output = new File(relocated, "nested/output/result");
-          assertEquals(encodedArguments(expected), read(output));
-          assertEquals(map, new File(output.getParentFile(), "result.map").isFile());
-          assertFalse(new File(relocated, "result").exists());
-          assertNoTemporaryMaps(output.getParentFile());
         }
       }
     }
@@ -638,6 +641,92 @@ public class TestLinkerReplay {
             assertEquals("map", read(new File(output.getParentFile(), "result.map")));
           assertFalse(new File(relocated, "result").exists());
           assertNoTemporaryMaps(output.getParentFile());
+        }
+      }
+    }
+  }
+
+  private void checkOriginSearchPaths(final String shell) throws Exception {
+    for (final String type : new String[] {
+        "string", "regex", "absolutePath"
+    }) {
+      for (final boolean map : new boolean[] {
+          false, true
+      }) {
+        for (final boolean dry : new boolean[] {
+            false, true
+        }) {
+          int variant = 0;
+          // Keep each expanded batch command within cmd.exe's command length limit.
+          for (final String token : new String[] {
+              "$ORIGIN", "${ORIGIN}", "$ORIGINAL", "$ORIGIN_tail", "$ORIGIN2"
+          }) {
+            for (final String option : new String[] {
+                "-rpath", "--rpath", "-rpath-link", "--rpath-link"
+            }) {
+              final String id = shell + type + map + dry + option + variant++;
+              final File original = new File(directory, "origin original " + id);
+              final File working = new File(original, "nested/output");
+              assertTrue(working.mkdirs());
+              final File relocated = new File(directory, "origin relocated " + id + " %!&");
+              final String base = relocated + File.separator;
+              final String source = new File(directory, "origin source").toString() + File.separator;
+              final String fixed = new File(directory, "unchanged search").toString();
+              final List<String> payload = new ArrayList<>();
+              final List<String> expected = new ArrayList<>();
+              final List<Substitution> rules = new ArrayList<>();
+
+              final String from = source + "entry" + File.separator;
+              final String replacement = token + "/../../";
+              final String rewritten = replacement + "lib";
+              final boolean origin = "$ORIGIN".equals(token) || "${ORIGIN}".equals(token);
+              final String resolved = (origin ? "" : base) + rewritten;
+              final String input = fixed + ":" + from + "lib:relative::";
+              final String output = fixed + ":" + resolved + ":relative::";
+
+              payload.addAll(Arrays.asList(option, input, "-Xlinker", option, "-Xlinker", input, option + "=" + input,
+                  "-Wl," + option + "," + input, "-Wl,--as-needed," + option + "=" + input + ",--no-as-needed"));
+              expected
+                  .addAll(Arrays.asList(option, output, "-Xlinker", option, "-Xlinker", output, option + "=" + output,
+                      "-Wl," + option + "," + output, "-Wl,--as-needed," + option + "=" + output + ",--no-as-needed"));
+
+              // ORIGIN has loader semantics only in the final search-list context.
+              payload.addAll(Arrays.asList("NAR_ORIGIN_OPTION", from + "lib", "-Wl,-rpath", from + "lib"));
+              expected.addAll(Arrays.asList("-rpath", resolved, base + rewritten));
+              for (final String prefix : new String[] {
+                  "", "-L", "-F"
+              }) {
+                payload.add(prefix + from + "lib");
+                expected.add(prefix + base + rewritten);
+              }
+              rules.add(substitution(type, "regex".equals(type) ? java.util.regex.Pattern.quote(from) : from,
+                  "regex".equals(type) ? java.util.regex.Matcher.quoteReplacement(replacement) : replacement));
+              // Keep provenance until the final rule: a later ordinary path needs its base.
+              payload.addAll(Arrays.asList("-rpath", source + "restore"));
+              expected.addAll(Arrays.asList("-rpath", base + "restored/lib"));
+              rules.add(substitution("string", source + "restore", "$ORIGIN/restore"));
+              rules.add(substitution("string", "$ORIGIN/restore", "restored/lib"));
+              payload.addAll(Arrays.asList("-rpath", source + "absolute"));
+              expected.addAll(Arrays.asList("-rpath", fixed));
+              rules.add(substitution("string", source + "absolute", "${ORIGIN}/absolute"));
+              rules.add(substitution("string", "${ORIGIN}/absolute", fixed));
+              rules.add(substitution("string", "NAR_ORIGIN_OPTION", "-rpath"));
+              rules.add(substitution("regex", "^-Wl,-rpath$", ""));
+              rules.add(substitution("absolutePath", original.toString(), ""));
+              final List<String[]> history = recordArguments(working, payload, dry, map);
+              assertEquals(!dry, new File(working, "result").isFile());
+              Files.deleteIfExists(new File(working, "result").toPath());
+              Files.deleteIfExists(new File(working, "result.map").toPath());
+              final File replay = scriptWithSubstitutions(history, shell, rules);
+              Files.move(original.toPath(), relocated.toPath());
+              assertReplaySucceeds(replay, shell, relocated);
+              final File result = new File(relocated, "nested/output/result");
+              assertEquals(encodedArguments(expected), read(result));
+              assertEquals(map, new File(result.getParentFile(), "result.map").isFile());
+              assertFalse(new File(relocated, "result").exists());
+              assertNoTemporaryMaps(result.getParentFile());
+            }
+          }
         }
       }
     }
@@ -1079,6 +1168,12 @@ public class TestLinkerReplay {
   }
 
   @Test
+  public void testBatchReplayPreservesLoaderOriginPaths() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkOriginSearchPaths("bat");
+  }
+
+  @Test
   public void testBatchReplayPreservesPathsAfterLiteralSearchEntries() throws Exception {
     Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
     checkLiteralSearchEntries("bat");
@@ -1210,6 +1305,15 @@ public class TestLinkerReplay {
       assertEquals("first value '$HOME' \"quoted\" & ;", read(new File(working, name)));
       assertFalse(new File(directory, "output").exists());
     }
+  }
+
+  @Test
+  public void testPosixReplayPreservesLoaderOriginPaths() throws Exception {
+    Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+    for (final String shell : new String[] {
+        "sh", "bash"
+    })
+      checkOriginSearchPaths(shell);
   }
 
   @Test

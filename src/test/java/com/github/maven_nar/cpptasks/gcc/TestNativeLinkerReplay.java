@@ -66,6 +66,8 @@ public class TestNativeLinkerReplay {
   }
 
   private void checkReplay(final String mode, final boolean map) throws Exception {
+    final boolean origin = mode.startsWith("origin");
+    final String originToken = "originBracedRegex".equals(mode) ? "${ORIGIN}" : "$ORIGIN";
     final boolean list = mode.startsWith("list");
     final boolean suffix = "suffix".equals(mode);
     final boolean wrapped = "wrapped".equals(mode);
@@ -79,7 +81,7 @@ public class TestNativeLinkerReplay {
       }) {
         final File root = new File(directory, mode + map + compiler + dry);
         final File output = new File(root, "nested/output");
-        final File plugins = new File(root, list ? "lib" : suffix ? "plugins/fallback" : "lib/plugins");
+        final File plugins = new File(root, (list || origin) ? "lib" : suffix ? "plugins/fallback" : "lib/plugins");
         assertTrue(output.mkdirs());
         assertTrue(plugins.mkdirs());
         for (final String source : new String[] {
@@ -113,7 +115,7 @@ public class TestNativeLinkerReplay {
         final CommandLineLinkerConfiguration config = new CommandLineLinkerConfiguration(linker, "native-replay",
             new String[][] {
                 preargs, {
-                    "-L" + plugins, "-lreplayprobe"
+                    "-L" + (origin ? new File(root, "./lib") : plugins), "-lreplayprobe"
                 }
             }, new ProcessorParam[0], false, map, false, new String[0], null);
         final File binary = new File(output, "probe");
@@ -121,11 +123,18 @@ public class TestNativeLinkerReplay {
             new File(root, "main.o").toString()
         }, config);
         assertEquals(!dry, binary.isFile());
-        if (list && !dry)
+        if ((list || origin) && !dry)
           assertCommand(directory, binary.toString());
         final File commands = new File(root, "link-commands");
         NarUtil.writeCommandFile(commands, history);
         final List<Substitution> rules = new ArrayList<>();
+        if (origin) {
+          final boolean regex = "originBracedRegex".equals(mode);
+          final String replacement = originToken + "/../../lib";
+          rules.add(substitution(regex ? "regex" : "string",
+              regex ? "^" + java.util.regex.Pattern.quote(recordedPath.toString()) + "$" : recordedPath.toString(),
+              regex ? java.util.regex.Matcher.quoteReplacement(replacement) : replacement));
+        }
         if (list) {
           final String prefix = root.toString() + File.separator;
           rules.add(substitution("listRegex".equals(mode) ? "regex" : "string",
@@ -137,7 +146,7 @@ public class TestNativeLinkerReplay {
           rules.add(substitution("regex", "^(-Xlinker|-rpath)$", ""));
         if (suffix) {
           rules.add(substitution("regex", "^lib/(plugins)$", "$1:$1/fallback"));
-        } else if (!list) {
+        } else if (!list && !origin) {
           rules.add(substitution("regex", attached ? "^-Wl,-rpath,(lib)$" : "^(lib)$",
               literal ? (attached ? "-Wl,-rpath," : "") + "/usr/lib:$1/plugins"
                   : wrapped ? "-Wl,-rpath,$1/plugins" : "$1:$1/plugins"));
@@ -157,10 +166,11 @@ public class TestNativeLinkerReplay {
           }
           assertCommand(root, shell, replay.toString());
           assertCommand(root, "readelf", "-d", binary.toString());
-          final String expected = list ? new File(root, "missing") + ":" + plugins
-              : suffix ? new File(root, "plugins") + ":" + plugins
-                  : literal ? "/usr/lib:" + plugins
-                      : wrapped ? plugins.toString() : new File(root, "lib") + ":" + plugins;
+          final String expected = origin ? originToken + "/../../lib"
+              : list ? new File(root, "missing") + ":" + plugins
+                  : suffix ? new File(root, "plugins") + ":" + plugins
+                      : literal ? "/usr/lib:" + plugins
+                          : wrapped ? plugins.toString() : new File(root, "lib") + ":" + plugins;
           assertTrue(readLog(), readLog().contains("[" + expected + "]"));
           // Neither the project cwd nor LD_LIBRARY_PATH may hide a relative RUNPATH
           // entry.
@@ -168,6 +178,12 @@ public class TestNativeLinkerReplay {
           assertEquals(map, new File(output, "probe.map").isFile());
           for (final String name : output.list())
             assertFalse(name, name.startsWith("nar-map-") && name.endsWith(".tmp"));
+          if (origin) {
+            final File relocated = new File(directory, root.getName() + " moved");
+            Files.move(root.toPath(), relocated.toPath());
+            assertCommand(directory, new File(relocated, "nested/output/probe").toString());
+            Files.move(relocated.toPath(), root.toPath());
+          }
         }
       }
     }
@@ -234,6 +250,18 @@ public class TestNativeLinkerReplay {
   public void testLiteralRuntimePathPrefixes() throws Exception {
     for (final String mode : new String[] {
         "literal", "literalWrapped"
+    }) {
+      for (final boolean map : new boolean[] {
+          false, true
+      })
+        checkReplay(mode, map);
+    }
+  }
+
+  @Test
+  public void testOriginRuntimePathsSurviveRelocation() throws Exception {
+    for (final String mode : new String[] {
+        "originString", "originBracedRegex"
     }) {
       for (final boolean map : new boolean[] {
           false, true
