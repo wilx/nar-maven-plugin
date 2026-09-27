@@ -672,7 +672,9 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         literal colons in directory names, and Windows drive colons are not list separators.
         Regex rules match complete arguments; generated directory references are added only when
         the final script is rendered. Originally relative paths remain relative to the recorded
-        linker directory.
+        linker directory. Relative working directories also resolve from the invocation
+        directory. The sh and bash scripts bypass <<<CDPATH>>> and treat leading dashes in
+        these directory names literally.
         Existing plain-text replay logs remain supported.
 
         When linker maps are enabled, replay scripts check that linking produced a nonempty

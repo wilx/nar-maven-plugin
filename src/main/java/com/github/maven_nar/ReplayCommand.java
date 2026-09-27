@@ -472,7 +472,9 @@ public final class ReplayCommand {
     writer.println("(");
     if (needsBase)
       writer.println("_nar_replay_base=$(pwd -P) || exit $?");
-    writer.println("cd " + quote(cwd, false) + " || exit $?");
+    // A dot prefix bypasses CDPATH and makes leading '-' a literal directory name.
+    final String target = cwd.isEmpty() || cwd.startsWith("/") ? cwd : "./" + cwd;
+    writer.println("cd " + quote(target, false) + " || exit $?");
     final String temp = temporary == null ? null : quote("./" + temporary, false);
     if (temp != null) {
       // Clear an earlier failed replay's map so a linker that produces nothing cannot
