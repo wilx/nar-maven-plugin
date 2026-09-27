@@ -377,7 +377,20 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.6.3</version>
+        <dependencies>
+          <dependency>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>extra-enforcer-rules</artifactId>
+            <version>1.12.1</version>
+          </dependency>
+        </dependencies>
         <executions>
+          <!-- The explicit Maven minimum below supersedes these inherited checks. -->
+          <execution>
+            <id>ban-known-bad-maven-versions</id>
+            <phase>none</phase>
+          </execution>
           <execution>
             <id>enforce-maven</id>
             <goals>
@@ -386,8 +399,11 @@
             <configuration>
               <rules>
                 <requireMavenVersion>
-                  <version>3.0.5</version>
+                  <version>[3.6.3,)</version>
                 </requireMavenVersion>
+                <requireJavaVersion>
+                  <version>[1.8,)</version>
+                </requireJavaVersion>
               </rules>
             </configuration>
           </execution>
@@ -400,7 +416,7 @@
               <configuration>
                   <rules>
                       <enforceBytecodeVersion>
-                          <maxJdkVersion>1.8</maxJdkVersion>
+                          <maxJdkVersion>8</maxJdkVersion>
                       </enforceBytecodeVersion>
                   </rules>
                   <fail>true</fail>
