@@ -97,9 +97,8 @@
     <url>https://github.com/maven-nar/nar-maven-plugin/issues</url>
   </issueManagement>
   <ciManagement>
-    <system>Travis CI</system>
-    <url>https://travis-ci.org/maven-nar/nar-maven-plugin</url>
-    <!-- See also: https://ci.appveyor.com/project/maven-nar/nar-maven-plugin -->
+    <system>GitHub Actions</system>
+    <url>https://github.com/maven-nar/nar-maven-plugin/actions/workflows/ci.yml</url>
   </ciManagement>
   <distributionManagement>
     <snapshotRepository>
