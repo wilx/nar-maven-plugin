@@ -67,10 +67,23 @@ jobs:
 
       - name: Set up MSVC x64
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-        with:
-          arch: x64
-          vsversion: '2022'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $visualStudio = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or !$visualStudio) {
+            throw 'Visual Studio 2022 with the x64 C++ tools was not found'
+          }
+          $previousEnvironment = [Environment]::GetEnvironmentVariables('Process')
+          & (Join-Path $visualStudio 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          if (!$env:VSCMD_VER -or $env:VSCMD_ARG_HOST_ARCH -ne 'x64' -or $env:VSCMD_ARG_TGT_ARCH -ne 'x64') {
+            throw 'Visual Studio did not initialize the x64 build environment'
+          }
+          # Each workflow step starts a new shell; retain the developer environment for Maven.
+          Get-ChildItem Env: | Where-Object { $previousEnvironment[$_.Name] -cne $_.Value } | ForEach-Object {
+            "$($_.Name)=$($_.Value)" >> $env:GITHUB_ENV
+          }
+          Get-Command cl.exe, link.exe | Select-Object Name, Source
 
       - name: Install runtime for the bundled third-party JNI library
         if: runner.os == 'Windows'
