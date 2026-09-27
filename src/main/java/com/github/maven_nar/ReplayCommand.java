@@ -262,8 +262,14 @@ public final class ReplayCommand {
     }
 
     private void recognizeOperand(final String text) {
-      final int start = isAbsolute(text) ? 0
-          : (text.startsWith("-L") || text.startsWith("-F")) && isAbsolute(text.substring(2)) ? 2 : -1;
+      final int start;
+      if (isAbsolute(text)) {
+        start = 0;
+      } else if ((text.startsWith("-L") || text.startsWith("-F")) && isAbsolute(text.substring(2))) {
+        start = 2;
+      } else {
+        start = -1;
+      }
       if (start >= 0) this.paths.add(start);
     }
 
