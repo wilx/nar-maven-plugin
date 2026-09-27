@@ -551,7 +551,7 @@ public class NarIntegrationTestMojo extends AbstractDependencyMojo {
     }
     variables.put("basedir", this.basedir.getAbsolutePath());
     variables.put("user.dir", this.workingDirectory.getAbsolutePath());
-    variables.put("localRepository", getLocalRepository().getBasedir());
+    variables.put("localRepository", getLocalRepositoryDirectory().getAbsolutePath());
     // Surefire's duplicate-execution checksum includes properties, but not execution IDs.
     variables.put("nar.integrationTest.executionId", this.mojoExecution.getExecutionId());
     config.map("systemPropertyVariables", variables);

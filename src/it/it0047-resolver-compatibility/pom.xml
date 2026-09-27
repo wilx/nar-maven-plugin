@@ -52,6 +52,8 @@
     <groupId>@project.groupId@</groupId><artifactId>nar-maven-plugin</artifactId><version>@project.version@</version>
     <extensions>true</extensions>
     <configuration>
+      <targetDirectory>${project.build.directory}/assembled</targetDirectory>
+      <unpackDirectory>${project.build.directory}/nar</unpackDirectory>
       <architecture>amd64</architecture><os>Linux</os><aol>amd64-Linux-gpp</aol><linker><name>g++</name></linker>
     </configuration>
   </plugin></plugins></build>

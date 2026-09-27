@@ -46,6 +46,7 @@ for ideas, see:
 Documentation
 -------------
 * [Java/JNI integration tests](docs/java-integration-tests.md)
+* [Maven compatibility](docs/maven-compatibility.md)
 * [Wiki](https://github.com/maven-nar/nar-maven-plugin/wiki)
     * [How to contribute](https://github.com/maven-nar/nar-maven-plugin/wiki/How-to-contribute)
     * [FAQ](https://github.com/maven-nar/nar-maven-plugin/wiki/Frequently_Asked_Questions)

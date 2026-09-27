@@ -73,9 +73,13 @@ assert pluginVersion
 String goal = "com.github.maven-nar:nar-maven-plugin:${pluginVersion}:"
 def invoker = new DefaultInvoker().setMavenHome(new File(System.getProperty('maven.home')))
 def run = { String name, String artifactVersion, List extra, boolean success ->
+  // Reuse only the repository cache. ZIP timestamps can be equal between quickly
+  // published versions, which would test assembly's incremental-copy policy instead.
+  new File(basedir, 'target/nar').deleteDir()
+  new File(basedir, 'target/assembled').deleteDir()
   def request = new DefaultInvocationRequest().setBaseDirectory(basedir).setBatchMode(true)
   request.setLocalRepositoryDirectory(cache)
-  request.setGoals([goal + 'nar-download-dependencies', goal + 'nar-unpack-dependencies'] + extra)
+  request.setGoals([goal + 'nar-download-dependencies', goal + 'nar-unpack-dependencies', goal + 'nar-assembly'] + extra)
   def properties = new Properties()
   properties.setProperty('fixture.version', artifactVersion)
   properties.setProperty('maven.plugin.validation', 'verbose')
@@ -90,6 +94,9 @@ def run = { String name, String artifactVersion, List extra, boolean success ->
   return log.text
 }
 def verify = { String version, String marker ->
+  // Assembly must use the same resolved attachments rather than reconstruct repository paths.
+  assert new File(basedir, 'target/assembled/include/marker.h').text == marker
+  assert new File(basedir, 'target/assembled/lib/amd64-Linux-gpp/shared/marker.txt').text == marker
   // Base-version extraction paths must agree with NAR's native classpath construction.
   assert new File(basedir, "target/nar/native-lib-${version}-noarch/include/marker.h").text == marker
   assert new File(basedir, "target/nar/native-lib-${version}-amd64-Linux-gpp-shared/lib/amd64-Linux-gpp/shared/marker.txt").text == marker
@@ -103,8 +110,6 @@ publish('2.0-SNAPSHOT', '2.0-20260927.120000-1', 'snapshot-one')
 logs << run('snapshot', '2.0-SNAPSHOT', [], true)
 verify('2.0-SNAPSHOT', 'snapshot-one')
 publish('2.0-SNAPSHOT', '2.0-20260927.120100-2', 'snapshot-two')
-// Remove extraction results so a successful replay must read the newly resolved archive.
-new File(basedir, 'target/nar').deleteDir()
 logs << run('snapshot-update', '2.0-SNAPSHOT', ['-U'], true)
 verify('2.0-SNAPSHOT', 'snapshot-two')
 publish('3.0-SNAPSHOT', '3.0-SNAPSHOT', 'installed-snapshot')
@@ -127,12 +132,11 @@ assert published['4.0']['noarch'].delete()
 assert run('missing-attachment', '4.0', [], false).contains('nar not found')
 run('missing-offline', 'absent', ['-o'], false)
 // Resolver 1.4 in Maven 3.6 ignores these flags; newer hosts exercise the split layout.
-  new File(basedir, 'target/nar').deleteDir()
-  cache = new File(basedir, 'split cache path')
-  assert cache.mkdirs()
-  logs << run('split', '1.0', ['-Daether.enhancedLocalRepository.split=true',
-      '-Daether.enhancedLocalRepository.splitRemoteRepository=true'], true)
-  verify('1.0', 'release')
+cache = new File(basedir, 'split cache path')
+assert cache.mkdirs()
+logs << run('split', '1.0', ['-Daether.enhancedLocalRepository.split=true',
+    '-Daether.enhancedLocalRepository.splitRemoteRepository=true'], true)
+verify('1.0', 'release')
 // Check the actual loaded artifact in both caches, including the split layout.
 def expected = new File(basedir, "plugin-under-test/com/github/maven-nar/nar-maven-plugin/${pluginVersion}/nar-maven-plugin-${pluginVersion}.jar").bytes
 ['cache path', 'split cache path'].each { name ->
