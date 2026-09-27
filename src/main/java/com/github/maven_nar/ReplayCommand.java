@@ -70,11 +70,17 @@ public final class ReplayCommand {
     }
 
     private void addPath(final String text, final int start) {
-      for (final Path path : this.paths) {
+      final Path added = new Path(start, pathEnd(text, start, text.length(), this.paths));
+      for (int i = 0; i < this.paths.size(); i++) {
+        final Path path = this.paths.get(i);
         if (path.start == start)
           return;
+        if (path.start > start) {
+          this.paths.add(i, added);
+          return;
+        }
       }
-      this.paths.add(new Path(start, pathEnd(text, start, text.length(), new ArrayList<Path>())));
+      this.paths.add(added);
     }
 
     /**
@@ -247,6 +253,7 @@ public final class ReplayCommand {
     }
 
     private void recognizeOperand(final String text) {
+      recognizeSearchPaths(text);
       final int start;
       if (isAbsolute(text)) {
         start = 0;
@@ -257,6 +264,35 @@ public final class ReplayCommand {
       }
       if (start >= 0)
         addPath(text, start);
+    }
+
+    /**
+     * Recognize each absolute entry without reinterpreting previously tracked
+     * filenames.
+     */
+    private void recognizeSearchPaths(final String text) {
+      for (int start = 0; start < text.length(); start++) {
+        boolean literal = false;
+        for (final Path path : this.paths) {
+          if (start > path.start && start < path.end) {
+            start = path.end - 1;
+            literal = true;
+            break;
+          }
+        }
+        if (literal || pathListStart(text, start) != start)
+          continue;
+        int component = start;
+        while (component < text.length()) {
+          final int end = pathEnd(text, component, text.length(), this.paths);
+          if (isAbsolute(text.substring(component, end)))
+            addPath(text, component);
+          start = end;
+          if (end == text.length() || text.charAt(end) == ',')
+            break;
+          component = end + 1;
+        }
+      }
     }
 
     void removeAbsolutePaths() {

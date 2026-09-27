@@ -667,8 +667,11 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         <<</usr/lib:invocation-directory/lib/plugins>>>. This applies to <<<-rpath>>> and
         <<<-rpath-link>>> (including their double-dash forms), separate <<<-Xlinker>>> arguments,
         and attached <<<-Wl>>> or assignment forms. Option context is updated after each rule.
-        Literal list entries stay unchanged; directory text added to the captured component
-        stays part of that component. Ordinary file and <<<-L>>>/<<<-F>>> operands retain
+        String and regex substitutions recognize every absolute entry in these search-path
+        lists, including entries introduced by earlier rules. For example, removing
+        <<</project/>>> from <<</project/missing:/project/lib>>> resolves both entries from
+        the invocation directory. Relative and empty list entries stay unchanged, and
+        directory text added to a captured component stays part of that component. Ordinary file and <<<-L>>>/<<<-F>>> operands retain
         literal colons in directory names, and Windows drive colons are not list separators.
         Regex rules match complete arguments; generated directory references are added only when
         the final script is rendered. Originally relative paths remain relative to the recorded
