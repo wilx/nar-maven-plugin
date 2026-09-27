@@ -66,6 +66,7 @@ public class TestNativeLinkerReplay {
   }
 
   private void checkReplay(final String mode, final boolean map) throws Exception {
+    final boolean suffix = "suffix".equals(mode);
     final boolean wrapped = "wrapped".equals(mode);
     final boolean literal = mode.startsWith("literal");
     final boolean attached = "literalWrapped".equals(mode);
@@ -77,7 +78,7 @@ public class TestNativeLinkerReplay {
       }) {
         final File root = new File(directory, mode + map + compiler + dry);
         final File output = new File(root, "nested/output");
-        final File plugins = new File(root, "lib/plugins");
+        final File plugins = new File(root, suffix ? "plugins/fallback" : "lib/plugins");
         assertTrue(output.mkdirs());
         assertTrue(plugins.mkdirs());
         for (final String source : new String[] {
@@ -101,10 +102,11 @@ public class TestNativeLinkerReplay {
         project.setProperty("nar.os", "Linux");
         task.setProject(project);
         task.setDecorateLinkerOptions(false);
+        final File recordedPath = new File(root, suffix ? "lib/plugins" : "lib");
         final String[] preargs = attached ? new String[] {
-            "-Wl,-rpath," + new File(root, "lib")
+            "-Wl,-rpath," + recordedPath
         } : new String[] {
-            "-Xlinker", "-rpath", "-Xlinker", new File(root, "lib").toString()
+            "-Xlinker", "-rpath", "-Xlinker", recordedPath.toString()
         };
         final CommandLineLinkerConfiguration config = new CommandLineLinkerConfiguration(linker, "native-replay",
             new String[][] {
@@ -123,9 +125,13 @@ public class TestNativeLinkerReplay {
         rules.add(substitution("absolutePath", root.toString(), ""));
         if (wrapped)
           rules.add(substitution("regex", "^(-Xlinker|-rpath)$", ""));
-        rules.add(substitution("regex", attached ? "^-Wl,-rpath,(lib)$" : "^(lib)$",
-            literal ? (attached ? "-Wl,-rpath," : "") + "/usr/lib:$1/plugins"
-                : wrapped ? "-Wl,-rpath,$1/plugins" : "$1:$1/plugins"));
+        if (suffix) {
+          rules.add(substitution("regex", "^lib/(plugins)$", "$1:$1/fallback"));
+        } else {
+          rules.add(substitution("regex", attached ? "^-Wl,-rpath,(lib)$" : "^(lib)$",
+              literal ? (attached ? "-Wl,-rpath," : "") + "/usr/lib:$1/plugins"
+                  : wrapped ? "-Wl,-rpath,$1/plugins" : "$1:$1/plugins"));
+        }
         for (final String shell : new String[] {
             "sh", "bash"
         }) {
@@ -141,8 +147,8 @@ public class TestNativeLinkerReplay {
           }
           assertCommand(root, shell, replay.toString());
           assertCommand(root, "readelf", "-d", binary.toString());
-          final String expected = literal ? "/usr/lib:" + plugins
-              : wrapped ? plugins.toString() : new File(root, "lib") + ":" + plugins;
+          final String expected = suffix ? new File(root, "plugins") + ":" + plugins
+              : literal ? "/usr/lib:" + plugins : wrapped ? plugins.toString() : new File(root, "lib") + ":" + plugins;
           assertTrue(readLog(), readLog().contains("[" + expected + "]"));
           // Neither the project cwd nor LD_LIBRARY_PATH may hide a relative RUNPATH
           // entry.
@@ -201,6 +207,15 @@ public class TestNativeLinkerReplay {
   @Test
   public void testDuplicatedRuntimePaths() throws Exception {
     checkReplay("duplicate", true);
+  }
+
+  @Test
+  public void testDuplicatedRuntimePathSuffixes() throws Exception {
+    for (final boolean map : new boolean[] {
+        false, true
+    }) {
+      checkReplay("suffix", map);
+    }
   }
 
   @Test

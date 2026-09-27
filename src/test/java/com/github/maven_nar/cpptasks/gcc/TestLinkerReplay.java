@@ -177,6 +177,92 @@ public class TestLinkerReplay {
     assertEquals(read(log), 0, status);
   }
 
+  private void checkCapturedPathSuffixes(final String shell) throws Exception {
+    for (final boolean named : new boolean[] {
+        false, true
+    }) {
+      for (final boolean map : new boolean[] {
+          false, true
+      }) {
+        for (final boolean dry : new boolean[] {
+            false, true
+        }) {
+          final String id = shell + named + map + dry;
+          final File original = new File(directory, "suffix original " + id);
+          final File working = new File(original, "nested/output");
+          assertTrue(working.mkdirs());
+          final File relocated = new File(directory, "suffix relocated " + id + " %!&");
+          final String sep = File.separator;
+          final String delimiter = File.pathSeparator;
+          final String base = relocated + sep;
+          final String capture = named ? "${path}" : "$1";
+          final String other = named ? "${other}" : "$2";
+          final List<String> payload = new ArrayList<>();
+          final List<String> expected = new ArrayList<>();
+          final List<Substitution> rules = new ArrayList<>();
+          rules.add(substitution("absolutePath", original.toString(), ""));
+          for (final String form : new String[] {
+              "separate", "attached", "later", "adjacent", "literal", "unrelated", "file", "punctuation"
+          }) {
+            final String option = "attached".equals(form) || "unrelated".equals(form) ? "-Wl,-rpath,"
+                : "file".equals(form) ? "-L" : "punctuation".equals(form) ? "-F" : "";
+            if (option.isEmpty()) {
+              payload.addAll(Arrays.asList("-Xlinker", "-rpath", "-Xlinker"));
+              expected.addAll(Arrays.asList("-Xlinker", "-rpath", "-Xlinker"));
+            }
+            final String component = "punctuation".equals(form) ? "leaf,part" + delimiter + "name" : form;
+            final String tail = "literal".equals(form) ? delimiter + "literal"
+                : "unrelated".equals(form) ? ",--as-needed" : "";
+            payload.add(option + new File(original, "lib" + sep + component) + tail);
+            String pattern = "^" + java.util.regex.Pattern.quote(option + "lib" + sep) + (named ? "(?<path>" : "(")
+                + java.util.regex.Pattern.quote(component) + ")";
+            String replacement = option + capture + delimiter + capture
+                + java.util.regex.Matcher.quoteReplacement(sep + "fallback");
+            String value = option + base + component + delimiter + base + component + sep + "fallback";
+            if ("literal".equals(form) || "unrelated".equals(form)) {
+              final String separator = "literal".equals(form) ? delimiter : ",";
+              final String literal = "literal".equals(form) ? "literal" : "--as-needed";
+              pattern += java.util.regex.Pattern.quote(separator) + (named ? "(?<other>" : "(") + literal + ")";
+              // A capture outside the tracked path must remain literal, even between copies.
+              replacement = option + capture + separator + other + separator + capture
+                  + java.util.regex.Matcher.quoteReplacement(sep + "fallback");
+              value = option + base + component + separator + literal + separator + base + component + sep + "fallback";
+            } else if ("adjacent".equals(form)) {
+              pattern = "^" + java.util.regex.Pattern.quote("lib" + sep)
+                  + (named ? "(?<path>adja)(?<other>cent)" : "(adja)(cent)");
+              replacement = java.util.regex.Matcher.quoteReplacement("objects" + sep) + capture + other;
+              value = base + "objects" + sep + component;
+            } else if ("file".equals(form) || "punctuation".equals(form)) {
+              replacement = java.util.regex.Matcher.quoteReplacement(option + "objects" + sep) + capture
+                  + ("file".equals(form) ? capture : "");
+              value = option + base + "objects" + sep + component + ("file".equals(form) ? component : "");
+            }
+            rules.add(substitution("regex", pattern + "$", replacement));
+            if ("later".equals(form)) {
+              rules.add(substitution("regex",
+                  "^" + java.util.regex.Pattern.quote("later" + delimiter + "later" + sep)
+                      + (named ? "(?<path>fallback)" : "(fallback)") + "$",
+                  capture + delimiter + capture + java.util.regex.Matcher.quoteReplacement(sep + "next")));
+              value = base + "fallback" + delimiter + base + "fallback" + sep + "next";
+            }
+            expected.add(value);
+          }
+          final List<String[]> history = recordArguments(working, payload, dry, map);
+          assertEquals(!dry, new File(working, "result").isFile());
+          Files.deleteIfExists(new File(working, "result").toPath());
+          Files.deleteIfExists(new File(working, "result.map").toPath());
+          final File replay = scriptWithSubstitutions(history, shell, rules);
+          Files.move(original.toPath(), relocated.toPath());
+          assertReplaySucceeds(replay, shell, relocated);
+          final File output = new File(relocated, "nested/output/result");
+          assertEquals(encodedArguments(expected), read(output));
+          assertEquals(map, new File(output.getParentFile(), "result.map").isFile());
+          assertNoTemporaryMaps(output.getParentFile());
+        }
+      }
+    }
+  }
+
   private void checkCapturePrefixedExecutable(final String shell, final boolean absolute, final boolean named)
       throws Exception {
     final boolean batch = "bat".equals(shell);
@@ -823,6 +909,12 @@ public class TestLinkerReplay {
   }
 
   @Test
+  public void testBatchReplayPreservesCapturedPathSuffixes() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkCapturedPathSuffixes("bat");
+  }
+
+  @Test
   public void testBatchReplayPreservesLiteralArguments() throws Exception {
     Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
     final File working = new File(directory, "batch work %!&");
@@ -922,6 +1014,16 @@ public class TestLinkerReplay {
     final Process process = new ProcessBuilder("/bin/sh", scriptFile.getAbsolutePath()).directory(directory).start();
     assertEquals(0, process.waitFor());
     assertEquals("legacy value", read(new File(directory, "legacy output")));
+  }
+
+  @Test
+  public void testPosixReplayPreservesCapturedPathSuffixes() throws Exception {
+    Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+    for (final String shell : new String[] {
+        "sh", "bash"
+    }) {
+      checkCapturedPathSuffixes(shell);
+    }
   }
 
   @Test
