@@ -23,7 +23,10 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.Map;
 
-/** Command arrays with optional replay metadata; legacy adapters continue to add plain arrays. */
+/**
+ * Command arrays with optional replay metadata; legacy adapters continue to add
+ * plain arrays.
+ */
 public final class ReplayCommandList extends ArrayList<String[]> {
   private static final long serialVersionUID = 1L;
   private final Map<String[], ReplayCommand> records = new IdentityHashMap<>();
@@ -33,13 +36,13 @@ public final class ReplayCommandList extends ArrayList<String[]> {
     this.records.put(arguments, record);
   }
 
-  public ReplayCommand getRecord(final String[] arguments) {
-    return this.records.get(arguments);
-  }
-
   @Override
   public void clear() {
     super.clear();
     this.records.clear();
+  }
+
+  public ReplayCommand getRecord(final String[] arguments) {
+    return this.records.get(arguments);
   }
 }

@@ -47,15 +47,21 @@ public abstract class GccCompatibleLinker extends AbstractLdLinker {
 
   @Override
   protected String[] getMapFileSwitch(final CCTask task, final String mapFile) {
-    // NAR supplies its effective target OS. Standalone cpptasks callers fall back to the host.
+    // NAR supplies its effective target OS. Standalone cpptasks callers fall back
+    // to the host.
     final String targetOS = task.getProject() == null ? null : task.getProject().getProperty("nar.os");
     final String os = targetOS == null ? getOSName() : targetOS;
     final boolean darwin = "MacOSX".equals(os) || "Mac OS X".equals(os) || "Darwin".equals(os);
-    final String[] options = darwin ? new String[] {"-map", mapFile} : new String[] {"-Map=" + mapFile};
+    final String[] options = darwin ? new String[] {
+        "-map", mapFile
+    } : new String[] {
+        "-Map=" + mapFile
+    };
     if (!this.compilerDriver) {
       return options;
     }
-    // Forward each argument explicitly: -Wl splits commas, and the generic decorator
+    // Forward each argument explicitly: -Wl splits commas, and the generic
+    // decorator
     // treats Darwin's -map as a compiler -m option.
     final String[] forwarded = new String[options.length * 2];
     for (int i = 0; i < options.length; i++) {
@@ -66,6 +72,15 @@ public abstract class GccCompatibleLinker extends AbstractLdLinker {
   }
 
   @Override
+  public String[] getOutputFileSwitch(final String outputFile) {
+    // ProcessBuilder receives individual arguments; response-file quoting is
+    // handled separately.
+    return new String[] {
+        "-o", outputFile.replace('\\', '/')
+    };
+  }
+
+  @Override
   protected boolean hasRawReplayArguments() {
     return true;
   }
@@ -73,11 +88,5 @@ public abstract class GccCompatibleLinker extends AbstractLdLinker {
   @Override
   protected String quoteFilename(final StringBuffer buf, final String filename) {
     return filename;
-  }
-
-  @Override
-  public String[] getOutputFileSwitch(final String outputFile) {
-    // ProcessBuilder receives individual arguments; response-file quoting is handled separately.
-    return new String[] {"-o", outputFile.replace('\\', '/')};
   }
 }
