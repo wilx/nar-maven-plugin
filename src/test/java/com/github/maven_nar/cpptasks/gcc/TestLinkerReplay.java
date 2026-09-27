@@ -782,6 +782,89 @@ public class TestLinkerReplay {
     assertNoTemporaryMaps(output.getParentFile());
   }
 
+  @Test
+  public void testPosixReplayPreservesPathsAfterLiteralSearchEntries() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    for (final String shell : new String[] {"sh", "bash"}) checkLiteralSearchEntries(shell);
+  }
+
+  @Test
+  public void testBatchReplayPreservesPathsAfterLiteralSearchEntries() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkLiteralSearchEntries("bat");
+  }
+
+  private void checkLiteralSearchEntries(final String shell) throws Exception {
+    for (final boolean named : new boolean[] {false, true}) {
+      for (final boolean map : new boolean[] {false, true}) {
+        for (final boolean dry : new boolean[] {false, true}) {
+          final String id = shell + named + map + dry;
+          final File original = new File(directory, "literal original " + id);
+          final File working = new File(original, "nested/output");
+          assertTrue(working.mkdirs());
+          final File relocated = new File(directory, "literal relocated " + id + " %!&");
+          final String sep = File.separator;
+          final String delimiter = File.pathSeparator;
+          final String fixed = new File(directory, "fixed search %!&").toString();
+          final List<String> payload = new ArrayList<>();
+          final List<String> expected = new ArrayList<>();
+          final List<Substitution> rules = new ArrayList<>();
+          rules.add(substitution("absolutePath", original.toString(), ""));
+          rules.add(substitution("regex", "^NAR_RPATH$", "-rpath"));
+          rules.add(substitution("regex", "^-rpath-link$", ""));
+          int number = 0;
+          for (final String form : new String[] {"direct", "forwarded", "attached", "bundled", "introduced", "assignment", "forwardedAssignment", "flagIntroduced", "flagRemoved", "file", "library"}) {
+            final boolean ordinaryPath = "file".equals(form) || "library".equals(form) || "flagRemoved".equals(form);
+            for (int variant = 0; variant < (ordinaryPath ? 1 : 5); variant++) {
+              // A comma is literal in a separate path-list operand; -Wl uses it to split linker arguments.
+              if (variant == 4 && ("attached".equals(form) || "bundled".equals(form)
+                  || "introduced".equals(form) || "forwardedAssignment".equals(form))) continue;
+              final String entries = fixed + delimiter + (variant == 1 ? "relative fallback" + delimiter : "");
+              final String directoryPrefix = variant == 2 ? "objects" + sep : variant == 3 ? "Q:\\absolute objects\\"
+                  : variant == 4 ? "objects,cache" + sep : "";
+              final String component = "lib" + number++;
+              final String option = "attached".equals(form) ? "-Wl,-rpath,"
+                  : "bundled".equals(form) ? "-Wl,--as-needed,-rpath,"
+                  : "forwardedAssignment".equals(form) ? "-Wl,--rpath=" : "assignment".equals(form) ? "--rpath=" : "library".equals(form) ? "-L" : "";
+              final String literal = ordinaryPath ? ("bat".equals(shell) ? "objects,cache;" : "objects:cache;") + sep
+                  : entries + directoryPrefix;
+              final String[] leading = "direct".equals(form) ? new String[] {"-rpath"}
+                  : "forwarded".equals(form) ? new String[] {"-Xlinker", "-rpath", "-Xlinker"}
+                  : "flagIntroduced".equals(form) ? new String[] {"NAR_RPATH"}
+                  : "flagRemoved".equals(form) ? new String[] {"-rpath-link"} : new String[0];
+              payload.addAll(Arrays.asList(leading));
+              if ("flagIntroduced".equals(form)) expected.add("-rpath");
+              else if (!"flagRemoved".equals(form)) expected.addAll(Arrays.asList(leading));
+              payload.add(option + new File(original, component));
+              final String outputOption = "introduced".equals(form) ? "-Wl,-rpath," : option;
+              final String capture = named ? "${path}" : "$1";
+              rules.add(substitution("regex", "^" + java.util.regex.Pattern.quote(option)
+                  + (named ? "(?<path>" : "(") + component + ")$",
+                  java.util.regex.Matcher.quoteReplacement(outputOption + literal) + capture
+                      + java.util.regex.Matcher.quoteReplacement(sep + "plugins")));
+              expected.add(outputOption + (ordinaryPath ? "" : entries)
+                  + (variant == 3 ? "" : relocated + sep) + (ordinaryPath ? literal : directoryPrefix)
+                  + component + sep + "plugins");
+            }
+          }
+          final List<String[]> history = recordArguments(working, payload, dry, map);
+          assertEquals(!dry, new File(working, "result").isFile());
+          Files.deleteIfExists(new File(working, "result").toPath());
+          Files.deleteIfExists(new File(working, "result.map").toPath());
+          final File replay = scriptWithSubstitutions(history, shell, rules);
+          Files.move(original.toPath(), relocated.toPath());
+          assertReplaySucceeds(replay, shell, relocated);
+          final File output = new File(relocated, "nested/output/result");
+          assertEquals(encodedArguments(expected), read(output));
+          assertEquals(map, new File(output.getParentFile(), "result.map").isFile());
+          if (map) assertEquals("map", read(new File(output.getParentFile(), "result.map")));
+          assertFalse(new File(relocated, "result").exists());
+          assertNoTemporaryMaps(output.getParentFile());
+        }
+      }
+    }
+  }
+
   private File argumentScript(final List<String[]> history, final String shell, final File working,
       final List<Substitution> rules) throws Exception {
     // Exercise the payload rules without also rewriting the JVM or the test's working directory.

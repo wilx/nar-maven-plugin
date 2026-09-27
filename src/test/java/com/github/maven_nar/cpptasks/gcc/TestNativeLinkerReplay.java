@@ -75,18 +75,28 @@ public class TestNativeLinkerReplay {
 
   @Test
   public void testDuplicatedRuntimePaths() throws Exception {
-    checkReplay(false);
+    checkReplay("duplicate", true);
   }
 
   @Test
   public void testPathWrappedInLinkerOption() throws Exception {
-    checkReplay(true);
+    checkReplay("wrapped", false);
   }
 
-  private void checkReplay(final boolean wrapped) throws Exception {
+  @Test
+  public void testLiteralRuntimePathPrefixes() throws Exception {
+    for (final String mode : new String[] {"literal", "literalWrapped"}) {
+      for (final boolean map : new boolean[] {false, true}) checkReplay(mode, map);
+    }
+  }
+
+  private void checkReplay(final String mode, final boolean map) throws Exception {
+    final boolean wrapped = "wrapped".equals(mode);
+    final boolean literal = mode.startsWith("literal");
+    final boolean attached = "literalWrapped".equals(mode);
     for (final String compiler : new String[] {"gcc", "g++"}) {
       for (final boolean dry : new boolean[] {false, true}) {
-        final File root = new File(directory, compiler + dry);
+        final File root = new File(directory, mode + map + compiler + dry);
         final File output = new File(root, "nested/output");
         final File plugins = new File(root, "lib/plugins");
         assertTrue(output.mkdirs());
@@ -107,9 +117,11 @@ public class TestNativeLinkerReplay {
         project.setProperty("nar.os", "Linux");
         task.setProject(project);
         task.setDecorateLinkerOptions(false);
+        final String[] preargs = attached ? new String[] {"-Wl,-rpath," + new File(root, "lib")}
+            : new String[] {"-Xlinker", "-rpath", "-Xlinker", new File(root, "lib").toString()};
         final CommandLineLinkerConfiguration config = new CommandLineLinkerConfiguration(linker, "native-replay",
-            new String[][] {{"-Xlinker", "-rpath", "-Xlinker", new File(root, "lib").toString()},
-                {"-L" + plugins, "-lreplayprobe"}}, new ProcessorParam[0], false, !wrapped, false, new String[0], null);
+            new String[][] {preargs, {"-L" + plugins, "-lreplayprobe"}},
+            new ProcessorParam[0], false, map, false, new String[0], null);
         final File binary = new File(output, "probe");
         linker.link(task, binary, new String[] {new File(root, "main.o").toString()}, config);
         assertEquals(!dry, binary.isFile());
@@ -118,7 +130,9 @@ public class TestNativeLinkerReplay {
         final List<Substitution> rules = new ArrayList<>();
         rules.add(substitution("absolutePath", root.toString(), ""));
         if (wrapped) rules.add(substitution("regex", "^(-Xlinker|-rpath)$", ""));
-        rules.add(substitution("regex", "^(lib)$", wrapped ? "-Wl,-rpath,$1/plugins" : "$1:$1/plugins"));
+        rules.add(substitution("regex", attached ? "^-Wl,-rpath,(lib)$" : "^(lib)$",
+            literal ? (attached ? "-Wl,-rpath," : "") + "/usr/lib:$1/plugins"
+                : wrapped ? "-Wl,-rpath,$1/plugins" : "$1:$1/plugins"));
         for (final String shell : new String[] {"sh", "bash"}) {
           Files.deleteIfExists(binary.toPath());
           Files.deleteIfExists(new File(output, "probe.map").toPath());
@@ -131,11 +145,12 @@ public class TestNativeLinkerReplay {
           }
           assertCommand(root, shell, replay.toString());
           assertCommand(root, "readelf", "-d", binary.toString());
-          final String expected = wrapped ? plugins.toString() : new File(root, "lib") + ":" + plugins;
+          final String expected = literal ? "/usr/lib:" + plugins
+              : wrapped ? plugins.toString() : new File(root, "lib") + ":" + plugins;
           assertTrue(readLog(), readLog().contains("[" + expected + "]"));
           // Neither the project cwd nor LD_LIBRARY_PATH may hide a relative RUNPATH entry.
           assertCommand(directory, binary.toString());
-          assertEquals(!wrapped, new File(output, "probe.map").isFile());
+          assertEquals(map, new File(output, "probe.map").isFile());
           for (final String name : output.list()) assertFalse(name, name.startsWith("nar-map-") && name.endsWith(".tmp"));
         }
       }
