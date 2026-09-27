@@ -197,7 +197,7 @@ public final class ReplayCommand {
       writer.println("if exist " + temp + " del /f /q " + temp);
       writer.println("if exist " + temp + " (popd & exit /b 1)");
     }
-    if (script.isEchoLines()) writer.println("echo " + echoBatch(display));
+    if (script.isEchoLines()) writer.println("echo " + escapeBatch(display));
     writer.println(line);
     writer.println("set \"_nar_replay_status=%errorlevel%\"");
     if (temp != null) {
@@ -445,9 +445,5 @@ public final class ReplayCommand {
     // Keep cmd outside quote mode; the quoted argv reaches the Windows runtime unchanged.
     return line.replace("^", "^^").replace("\"", "^\"").replace("&", "^&").replace("|", "^|")
         .replace("<", "^<").replace(">", "^>").replace("(", "^(").replace(")", "^)");
-  }
-
-  private static String echoBatch(final String line) {
-    return escapeBatch(line);
   }
 }
