@@ -501,7 +501,8 @@ public class TestLinkerReplay {
         "-Wl,--version-script=" + first + ",--version-script=" + second,
         "-Wl,-rpath," + first.getParent() + ":" + second.getParent() + File.separator,
         "--repeat=" + first + "," + first,
-        "--mixed=" + unchanged + "," + second + ",local.map");
+        "--mixed=" + unchanged + "," + second + ",local.map",
+        first + File.pathSeparator + second);
     final List<String[]> history = recordArguments(working, payload, dry, map);
     assertEquals(!dry, new File(working, "result").isFile());
     Files.deleteIfExists(new File(working, "result").toPath());
@@ -546,7 +547,8 @@ public class TestLinkerReplay {
         "-Wl," + flag + expectedFirst + "," + flag + expectedSecond,
         "-Wl,-rpath," + new File(relocated, "objects") + ":" + new File(relocated, "vendor") + File.separator,
         "--repeat=" + expectedFirst + "," + expectedFirst,
-        "--mixed=" + unchanged + "," + expectedSecond + ",local.map");
+        "--mixed=" + unchanged + "," + expectedSecond + ",local.map",
+        expectedFirst + File.pathSeparator + expectedSecond);
     if ("captures".equals(order)) {
       expected.set(0, "-Wl," + flag + expectedSecond + "," + flag + expectedFirst);
       expected.set(2, "--repeat=" + expectedFirst + "," + expectedFirst + "," + expectedFirst);
@@ -558,6 +560,124 @@ public class TestLinkerReplay {
     if (map) assertEquals("map", read(new File(output.getParentFile(), "result.map")));
     assertFalse(new File(relocated, "result").exists());
     assertNoTemporaryMaps(output.getParentFile());
+  }
+
+  @Test
+  public void testPosixReplayResolvesCapturePrefixedPathOperands() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    for (final String shell : new String[] {"sh", "bash"}) checkCapturePrefixedPaths(shell);
+  }
+
+  @Test
+  public void testBatchReplayResolvesCapturePrefixedPathOperands() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkCapturePrefixedPaths("bat");
+  }
+
+  private void checkCapturePrefixedPaths(final String shell) throws Exception {
+    for (final boolean absolute : new boolean[] {false, true}) {
+      for (final boolean named : new boolean[] {false, true}) {
+        for (final boolean map : new boolean[] {false, true}) {
+          for (final boolean dry : new boolean[] {false, true}) {
+            checkCapturePrefixedPaths(shell, absolute, named, map, dry);
+          }
+        }
+        checkCapturePrefixedExecutable(shell, absolute, named);
+      }
+    }
+  }
+
+  private void checkCapturePrefixedPaths(final String shell, final boolean absolute, final boolean named,
+      final boolean map, final boolean dry) throws Exception {
+    final String id = shell + absolute + named + map + dry;
+    final File original = new File(directory, "prefix original " + id);
+    final File working = new File(original, "nested/output");
+    assertTrue(working.mkdirs());
+    final File input = new File(original, "main.o");
+    final File libraries = new File(original, "libraries");
+    assertTrue(libraries.mkdir());
+    Files.write(input.toPath(), "object".getBytes(StandardCharsets.UTF_8));
+    Files.write(new File(working, "local.o").toPath(), "local".getBytes(StandardCharsets.UTF_8));
+    final List<String> payload = Arrays.asList(input.toString(), "-L" + libraries, "-L", libraries.toString(),
+        "-F" + libraries, "-F", libraries.toString(), "local.o");
+    final List<String> pre = new ArrayList<>(Arrays.asList("-cp", System.getProperty("java.class.path"),
+        PrefixPathProbe.class.getName()));
+    pre.addAll(payload);
+    pre.add("END_ARGUMENTS");
+    final List<String[]> history = new RecordingMojo().history();
+    recordProbe(working, "result", pre, new String[0], dry, map, history);
+    assertEquals(!dry, new File(working, "result").isFile());
+    Files.deleteIfExists(new File(working, "result").toPath());
+    Files.deleteIfExists(new File(working, "result.map").toPath());
+
+    final String special = "bat".equals(shell) ? " %PATH%! & ^" : " %! & ' \" $";
+    final File relocated = new File(directory, "prefix relocated " + id + special);
+    final File destination = absolute ? new File(directory, "absolute objects " + id + special)
+        : new File(original, "objects");
+    assertTrue(destination.mkdir());
+    Files.move(input.toPath(), new File(destination, "main.o").toPath());
+    Files.move(libraries.toPath(), new File(destination, "libraries").toPath());
+    final String prefix = (absolute ? destination.toString() : "objects") + File.separator;
+    final List<Substitution> rules = new ArrayList<>();
+    rules.add(substitution("absolutePath", original.toString(), ""));
+    rules.add(prefixSubstitution("", "main\\.o|libraries", prefix, named));
+    rules.add(prefixSubstitution("-L", "libraries", prefix, named));
+    rules.add(prefixSubstitution("-F", "libraries", prefix, named));
+    final File replay = scriptWithSubstitutions(history, shell, rules);
+    Files.move(original.toPath(), relocated.toPath());
+    assertReplaySucceeds(replay, shell, relocated);
+    final File expected = absolute ? destination : new File(relocated, "objects");
+    final String expectedLibraries = new File(expected, "libraries").toString();
+    final File output = new File(relocated, "nested/output/result");
+    assertEquals(encodedArguments(Arrays.asList(new File(expected, "main.o").toString(), "-L" + expectedLibraries,
+        "-L", expectedLibraries, "-F" + expectedLibraries, "-F", expectedLibraries, "local.o")), read(output));
+    assertEquals(map, new File(output.getParentFile(), "result.map").isFile());
+    if (map) assertEquals("map", read(new File(output.getParentFile(), "result.map")));
+    assertFalse(new File(relocated, "result").exists());
+    assertNoTemporaryMaps(output.getParentFile());
+  }
+
+  private static Substitution prefixSubstitution(final String option, final String pattern, final String prefix,
+      final boolean named) {
+    return substitution("regex", "^" + option + (named ? "(?<file>" : "(") + pattern + ")$",
+        java.util.regex.Matcher.quoteReplacement(option + prefix) + (named ? "${file}" : "$1"));
+  }
+
+  private void checkCapturePrefixedExecutable(final String shell, final boolean absolute, final boolean named)
+      throws Exception {
+    final boolean batch = "bat".equals(shell);
+    final String id = shell + absolute + named;
+    final File original = new File(directory, "prefix executable " + id);
+    final File working = new File(original, "nested/output");
+    assertTrue(working.mkdirs());
+    final File executable = new File(original, batch ? "tool.exe" : "tool");
+    Files.copy((batch ? new File(System.getenv("ComSpec")) : new File("/bin/true")).toPath(), executable.toPath());
+    if (!batch) assertTrue(executable.setExecutable(true));
+    final String[] args = batch ? new String[] {executable.toString(), "/d", "/c", "exit", "0"}
+        : new String[] {executable.toString()};
+    final com.github.maven_nar.ReplayCommandList history = new com.github.maven_nar.ReplayCommandList();
+    history.add(args, new com.github.maven_nar.ReplayCommand(working, args));
+    final File tools = absolute ? new File(directory, "absolute tools " + id + " %!&") : new File(original, "tools");
+    assertTrue(tools.mkdir());
+    Files.move(executable.toPath(), new File(tools, executable.getName()).toPath());
+    final File replay = scriptWithSubstitutions(history, shell, Arrays.asList(
+        substitution("absolutePath", original.toString(), ""),
+        prefixSubstitution("", "tool(?:\\.exe)?", (absolute ? tools.toString() : "tools") + File.separator, named)));
+    final File relocated = new File(directory, "prefix executable relocated " + id + " %!&");
+    Files.move(original.toPath(), relocated.toPath());
+    assertReplaySucceeds(replay, shell, relocated);
+  }
+
+  public static class PrefixPathProbe {
+    public static void main(final String[] args) throws Exception {
+      for (final String arg : args) {
+        if ("END_ARGUMENTS".equals(arg)) break;
+        if ("-L".equals(arg) || "-F".equals(arg)) continue;
+        final String path = arg.startsWith("-L") || arg.startsWith("-F") ? arg.substring(2) : arg;
+        if (!new File(path).exists()) throw new IllegalArgumentException("Missing replay path: " + path);
+      }
+      ReplayArgumentProbe.main(args);
+    }
   }
 
   private File argumentScript(final List<String[]> history, final String shell, final File working,
