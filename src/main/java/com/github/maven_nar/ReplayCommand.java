@@ -179,8 +179,6 @@ public final class ReplayCommand {
   private static final class Argument {
     private final String value;
     private final SortedSet<Integer> paths = new TreeSet<>();
-    private int operandStart = -1;
-    private boolean embeddedPaths;
 
     Argument(final String original, final Script script) {
       String current = original;
@@ -195,9 +193,6 @@ public final class ReplayCommand {
             for (final Substitution.Replacement edit : edits) {
               if (isAbsolute(current.substring(edit.start, edit.end))) {
                 this.paths.add(edit.start);
-                // A second path (including a path list starting with an absolute path) needs
-                // independent capture positions rather than a single operand boundary.
-                if (edit.start != this.operandStart) this.embeddedPaths = true;
               }
             }
           }
@@ -209,7 +204,9 @@ public final class ReplayCommand {
           for (final Substitution.Replacement edit : edits) {
             for (final Substitution.GroupCopy copy : edit.copies) {
               for (final int position : this.paths) {
-                if (position >= copy.start && position < copy.end) moved.add(copy.outputStart + position - copy.start);
+                if (position >= copy.start && position < copy.end) {
+                  moved.add(copiedPathStart(position, next, edit, copy));
+                }
               }
             }
           }
@@ -220,13 +217,6 @@ public final class ReplayCommand {
         }
       }
       this.value = current;
-      if (!this.embeddedPaths && this.operandStart >= 0
-          && (this.operandStart == 0 || this.value.startsWith("-L") || this.value.startsWith("-F"))) {
-        // A capture may move within one path: objects/$1 still denotes a single operand.
-        // Its base belongs before the complete path, not just before the copied filename.
-        this.paths.clear();
-        this.paths.add(this.operandStart);
-      }
       // Decide the base after all rules, so a path made absolute again needs no runtime prefix.
       for (final java.util.Iterator<Integer> positions = this.paths.iterator(); positions.hasNext();) {
         if (isAbsolute(this.value.substring(positions.next()))) positions.remove();
@@ -236,13 +226,10 @@ public final class ReplayCommand {
     private void recognizeOperand(final String text) {
       final int start = isAbsolute(text) ? 0
           : (text.startsWith("-L") || text.startsWith("-F")) && isAbsolute(text.substring(2)) ? 2 : -1;
-      if (start >= 0) {
-        this.paths.add(start);
-        this.operandStart = start;
-      }
+      if (start >= 0) this.paths.add(start);
     }
 
-    private static void move(final int position, final String before, final String after,
+    private void move(final int position, final String before, final String after,
         final List<Substitution.Replacement> edits, final SortedSet<Integer> moved) {
       int shift = 0;
       for (final Substitution.Replacement edit : edits) {
@@ -251,7 +238,7 @@ public final class ReplayCommand {
           boolean copied = false;
           for (final Substitution.GroupCopy copy : edit.copies) {
             if (position >= copy.start && (position < copy.end || copy.start == copy.end && position == copy.start)) {
-              moved.add(copy.outputStart + position - copy.start);
+              moved.add(copiedPathStart(position, after, edit, copy));
               copied = true;
             }
           }
@@ -278,6 +265,50 @@ public final class ReplayCommand {
         shift = edit.outputEnd - edit.end;
       }
       moved.add(position + shift);
+    }
+
+    /** Locate this occurrence's complete path, including directory text added before its capture. */
+    private int copiedPathStart(final int position, final String text,
+        final Substitution.Replacement edit, final Substitution.GroupCopy copy) {
+      if (position != copy.start) return copy.outputStart + position - copy.start;
+      int start = edit.outputStart;
+      Substitution.GroupCopy preceding = null;
+      for (final Substitution.GroupCopy previous : edit.copies) {
+        if (previous == copy) break;
+        start = previous.outputStart + previous.end - previous.start;
+        preceding = previous;
+      }
+      // Adjacent or overlapping captures of the same path can reconstruct one filename,
+      // including in reverse order. Keep its base before all fragments, never between them.
+      final String gap = text.substring(start, copy.outputStart);
+      if (preceding != null && preceding.start >= position && preceding.start <= copy.end
+          && copy.start <= preceding.end && this.paths.subSet(position + 1, preceding.end + 1).isEmpty()
+          && gap.indexOf(',') < 0 && gap.indexOf(':') < 0 && gap.indexOf(';') < 0) {
+        return copiedPathStart(preceding.start, text, edit, preceding);
+      }
+      // Only interpret newly inserted literal text. Punctuation inside a captured filename
+      // remains part of that filename, even when it looks like an option or list separator.
+      if (preceding != null) {
+        for (int i = start; i < copy.outputStart; i++) {
+          final char c = text.charAt(i);
+          final boolean drive = c == ':' && i == start + 1 && Character.isLetter(text.charAt(start))
+              && i + 1 < copy.outputStart && (text.charAt(i + 1) == '/' || text.charAt(i + 1) == '\\');
+          if (c == ',' || c == ';' || c == ':' && !drive) start = i + 1;
+        }
+      }
+      String prefix = text.substring(start, copy.outputStart);
+      if (prefix.startsWith("-Wl,")) {
+        start += prefix.lastIndexOf(',') + 1;
+        prefix = text.substring(start, copy.outputStart);
+      }
+      if (prefix.startsWith("-L") || prefix.startsWith("-F")) {
+        start += 2;
+      } else if (prefix.startsWith("-")) {
+        // An option assignment can contain a path, but an unknown wrapper is literal text.
+        final int equals = prefix.indexOf('=');
+        start = equals >= 0 ? start + equals + 1 : copy.outputStart;
+      }
+      return start;
     }
 
     String render(final boolean batch, final boolean executable) throws MojoExecutionException {

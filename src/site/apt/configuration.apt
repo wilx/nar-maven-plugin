@@ -650,6 +650,13 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         <<<invocation-directory/objects/main.o>>>. An absolute replacement prefix makes the
         result absolute, with no invocation-directory prefix. This also applies to the path
         following an attached <<<-L>>> or <<<-F>>> option.
+        Path boundaries are updated after each rule. Duplicating <<<lib>>> with <<<$1:$1/plugins>>>
+        resolves both copies from the invocation directory. Wrapping it with
+        <<<-Wl,-rpath,objects/$1>>> keeps the linker option outside the path and resolves
+        <<<objects/lib>>> from that directory. Later rules can reorder these paths or extract
+        one path and add another directory prefix. Punctuation copied inside a filename remains
+        literal; newly inserted separators between captures distinguish separate paths.
+        Adjacent capture fragments that reconstruct one filename receive one directory prefix.
         Regex rules match complete arguments; generated directory references are added only when
         the final script is rendered. Originally relative paths remain relative to the recorded
         linker directory.
