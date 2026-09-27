@@ -764,6 +764,74 @@ public class TestLinkerReplay {
         read(new File(directory, "result")));
   }
 
+  private void checkReplayWorkingDirectory(final String shell, final String name, final boolean relative,
+      final boolean missing)
+      throws Exception {
+    for (final boolean map : new boolean[] {
+        false, true
+    }) {
+      for (final boolean dry : new boolean[] {
+          false, true
+      }) {
+        final File root = new File(directory, "invocation " + shell + relative + missing + map + dry);
+        final File working = new File(root, name);
+        final File cdpath = new File(directory, "CDPATH decoy " + shell + relative + missing + map + dry);
+        final File decoy = new File(cdpath, name);
+        assertTrue(working.mkdirs());
+        assertTrue(decoy.mkdirs());
+        final List<String[]> history = recordArguments(working, Arrays.asList("directory probe"), dry, map);
+        assertEquals(!dry, new File(working, "result").isFile());
+        Files.deleteIfExists(new File(working, "result").toPath());
+        Files.deleteIfExists(new File(working, "result.map").toPath());
+        if (missing)
+          delete(working);
+        final List<Substitution> rules = new ArrayList<>();
+        if (relative)
+          rules.add(substitution("absolutePath", root.toString(), ""));
+        final File replay = scriptWithSubstitutions(history, shell, rules);
+        // Only the working directory was rewritten. The fix must not depend on
+        // having an argument that needs the invocation-directory variable.
+        assertFalse(read(replay).contains("_nar_replay_base="));
+        final File decoyMap = new File(decoy, "result.map");
+        Files.write(decoyMap.toPath(), "decoy map".getBytes(StandardCharsets.UTF_8));
+        String temporary = null;
+        for (final String argument : history.get(0)) {
+          if (argument.startsWith("-Map=")) {
+            temporary = argument.substring(5);
+            Files.write(new File(decoy, temporary).toPath(), "decoy temporary".getBytes(StandardCharsets.UTF_8));
+            if (!missing)
+              Files.write(new File(working, temporary).toPath(), "stale map".getBytes(StandardCharsets.UTF_8));
+          }
+        }
+        final File log = new File(directory, "run.log");
+        final ProcessBuilder builder = new ProcessBuilder("/bin/" + shell, replay.getAbsolutePath()).directory(root)
+            .redirectErrorStream(true).redirectOutput(log);
+        builder.environment().put("CDPATH", cdpath.toString());
+        builder.environment().put("OLDPWD", decoy.toString());
+        final int status = builder.start().waitFor();
+        if (missing) {
+          assertTrue("Missing directory must fail before linking: " + read(log), status != 0);
+          assertFalse(working.exists());
+        } else {
+          assertEquals(read(log), 0, status);
+          assertTrue("Replay wrote outside the recorded directory: " + read(log), new File(working, "result").isFile());
+          assertEquals(encodedArguments(Arrays.asList("directory probe")), read(new File(working, "result")));
+          assertEquals(map, new File(working, "result.map").isFile());
+          if (map)
+            assertEquals("map", read(new File(working, "result.map")));
+          assertNoTemporaryMaps(working);
+        }
+        assertFalse(new File(root, "result").exists());
+        assertFalse(new File(decoy, "result").exists());
+        assertEquals("decoy map", read(decoyMap));
+        if (temporary != null)
+          assertEquals("decoy temporary", read(new File(decoy, temporary)));
+        delete(root);
+        delete(cdpath);
+      }
+    }
+  }
+
   private void checkRewrittenExecutable(final String shell) throws Exception {
     final boolean batch = "bat".equals(shell);
     final File original = new File(directory, "executable original " + shell);
@@ -1029,6 +1097,17 @@ public class TestLinkerReplay {
   }
 
   @Test
+  public void testPosixReplayIgnoresCdpathForWorkingDirectory() throws Exception {
+    Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+    for (final String shell : new String[] {
+        "sh", "bash"
+    }) {
+      checkReplayWorkingDirectory(shell, "nested/output", true, false);
+      checkReplayWorkingDirectory(shell, "nested/output", false, false);
+    }
+  }
+
+  @Test
   public void testPosixReplayPreservesCapturedPathSuffixes() throws Exception {
     Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
     for (final String shell : new String[] {
@@ -1065,6 +1144,15 @@ public class TestLinkerReplay {
         "sh", "bash"
     })
       checkLiteralSearchEntries(shell);
+  }
+
+  @Test
+  public void testPosixReplayRejectsMissingWorkingDirectoryWithCdpath() throws Exception {
+    Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+    for (final String shell : new String[] {
+        "sh", "bash"
+    })
+      checkReplayWorkingDirectory(shell, "nested/output", true, true);
   }
 
   @Test
@@ -1132,6 +1220,19 @@ public class TestLinkerReplay {
         "sh", "bash"
     })
       checkChangedPathStructure(shell);
+  }
+
+  @Test
+  public void testPosixReplayTreatsWorkingDirectoryAsLiteralPath() throws Exception {
+    Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+    for (final String shell : new String[] {
+        "sh", "bash"
+    }) {
+      for (final String name : new String[] {
+          "-output", "-", "output %!& ' \" $"
+      })
+        checkReplayWorkingDirectory(shell, name, true, false);
+    }
   }
 
   @Test
