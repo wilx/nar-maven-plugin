@@ -66,6 +66,7 @@ public class TestNativeLinkerReplay {
   }
 
   private void checkReplay(final String mode, final boolean map) throws Exception {
+    final boolean list = mode.startsWith("list");
     final boolean suffix = "suffix".equals(mode);
     final boolean wrapped = "wrapped".equals(mode);
     final boolean literal = mode.startsWith("literal");
@@ -78,7 +79,7 @@ public class TestNativeLinkerReplay {
       }) {
         final File root = new File(directory, mode + map + compiler + dry);
         final File output = new File(root, "nested/output");
-        final File plugins = new File(root, suffix ? "plugins/fallback" : "lib/plugins");
+        final File plugins = new File(root, list ? "lib" : suffix ? "plugins/fallback" : "lib/plugins");
         assertTrue(output.mkdirs());
         assertTrue(plugins.mkdirs());
         for (final String source : new String[] {
@@ -103,10 +104,11 @@ public class TestNativeLinkerReplay {
         task.setProject(project);
         task.setDecorateLinkerOptions(false);
         final File recordedPath = new File(root, suffix ? "lib/plugins" : "lib");
+        final String search = list ? new File(root, "missing") + ":" + plugins : recordedPath.toString();
         final String[] preargs = attached ? new String[] {
-            "-Wl,-rpath," + recordedPath
+            "-Wl,-rpath," + search
         } : new String[] {
-            "-Xlinker", "-rpath", "-Xlinker", recordedPath.toString()
+            "-Xlinker", "-rpath", "-Xlinker", search
         };
         final CommandLineLinkerConfiguration config = new CommandLineLinkerConfiguration(linker, "native-replay",
             new String[][] {
@@ -119,15 +121,23 @@ public class TestNativeLinkerReplay {
             new File(root, "main.o").toString()
         }, config);
         assertEquals(!dry, binary.isFile());
+        if (list && !dry)
+          assertCommand(directory, binary.toString());
         final File commands = new File(root, "link-commands");
         NarUtil.writeCommandFile(commands, history);
         final List<Substitution> rules = new ArrayList<>();
-        rules.add(substitution("absolutePath", root.toString(), ""));
+        if (list) {
+          final String prefix = root.toString() + File.separator;
+          rules.add(substitution("listRegex".equals(mode) ? "regex" : "string",
+              "listRegex".equals(mode) ? java.util.regex.Pattern.quote(prefix) : prefix, ""));
+        } else {
+          rules.add(substitution("absolutePath", root.toString(), ""));
+        }
         if (wrapped)
           rules.add(substitution("regex", "^(-Xlinker|-rpath)$", ""));
         if (suffix) {
           rules.add(substitution("regex", "^lib/(plugins)$", "$1:$1/fallback"));
-        } else {
+        } else if (!list) {
           rules.add(substitution("regex", attached ? "^-Wl,-rpath,(lib)$" : "^(lib)$",
               literal ? (attached ? "-Wl,-rpath," : "") + "/usr/lib:$1/plugins"
                   : wrapped ? "-Wl,-rpath,$1/plugins" : "$1:$1/plugins"));
@@ -147,8 +157,10 @@ public class TestNativeLinkerReplay {
           }
           assertCommand(root, shell, replay.toString());
           assertCommand(root, "readelf", "-d", binary.toString());
-          final String expected = suffix ? new File(root, "plugins") + ":" + plugins
-              : literal ? "/usr/lib:" + plugins : wrapped ? plugins.toString() : new File(root, "lib") + ":" + plugins;
+          final String expected = list ? new File(root, "missing") + ":" + plugins
+              : suffix ? new File(root, "plugins") + ":" + plugins
+                  : literal ? "/usr/lib:" + plugins
+                      : wrapped ? plugins.toString() : new File(root, "lib") + ":" + plugins;
           assertTrue(readLog(), readLog().contains("[" + expected + "]"));
           // Neither the project cwd nor LD_LIBRARY_PATH may hide a relative RUNPATH
           // entry.
@@ -233,5 +245,17 @@ public class TestNativeLinkerReplay {
   @Test
   public void testPathWrappedInLinkerOption() throws Exception {
     checkReplay("wrapped", false);
+  }
+
+  @Test
+  public void testRewrittenAbsoluteRuntimePathLists() throws Exception {
+    for (final String mode : new String[] {
+        "listString", "listRegex"
+    }) {
+      for (final boolean map : new boolean[] {
+          false, true
+      })
+        checkReplay(mode, map);
+    }
   }
 }

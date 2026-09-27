@@ -177,6 +177,75 @@ public class TestLinkerReplay {
     assertEquals(read(log), 0, status);
   }
 
+  private void checkAbsoluteSearchLists(final String shell) throws Exception {
+    for (final String type : new String[] {
+        "absolutePath", "string", "regex"
+    }) {
+      for (final boolean map : new boolean[] {
+          false, true
+      }) {
+        for (final boolean dry : new boolean[] {
+            false, true
+        }) {
+          final String id = shell + type + map + dry;
+          final File original = new File(directory, "list original " + id);
+          final File working = new File(original, "nested/output");
+          assertTrue(working.mkdirs());
+          final File relocated = new File(directory, "list relocated " + id + " %!&");
+          final String source = new File(directory, "search source").toString() + File.separator;
+          final String base = relocated + File.separator;
+          final String fixed = new File(directory, "fixed search").toString();
+          final List<String> payload = new ArrayList<>();
+          final List<String> expected = new ArrayList<>();
+          final List<Substitution> rules = new ArrayList<>();
+          for (final String delimiter : new String[] {
+              ":", ";"
+          }) {
+            final String input = source + "missing" + delimiter + delimiter + "relative" + delimiter + fixed + delimiter
+                + source + "lib %!&" + delimiter;
+            final String output = base + "missing" + delimiter + delimiter + "relative" + delimiter + fixed + delimiter
+                + base + "lib %!&" + delimiter;
+            for (final String option : new String[] {
+                "-rpath", "--rpath", "-rpath-link", "--rpath-link"
+            }) {
+              payload.addAll(Arrays.asList(option, input, "-Xlinker", option, "-Xlinker", input, option + "=" + input,
+                  "-Wl," + option + "," + input, "-Wl,--as-needed," + option + "=" + input + ",--no-as-needed"));
+              expected
+                  .addAll(Arrays.asList(option, output, "-Xlinker", option, "-Xlinker", output, option + "=" + output,
+                      "-Wl," + option + "," + output, "-Wl,--as-needed," + option + "=" + output + ",--no-as-needed"));
+            }
+            // A list introduced by one rule must be recognized before the next rule.
+            final String marker = "LATER_LIST_" + (":".equals(delimiter) ? "COLON" : "SEMICOLON");
+            payload.addAll(Arrays.asList("-rpath", marker));
+            expected.addAll(Arrays.asList("-rpath", output));
+            rules.add(substitution("string", marker, input));
+            // The same punctuation in a file or library directory is not list syntax.
+            for (final String option : new String[] {
+                "", "-L", "-F"
+            }) {
+              payload.add(option + source + "first" + delimiter + source + "second");
+              expected.add(option + base + "first" + delimiter + ("absolutePath".equals(type) ? base : "") + "second");
+            }
+          }
+          rules.add(substitution(type, "regex".equals(type) ? java.util.regex.Pattern.quote(source) : source, ""));
+          rules.add(substitution("absolutePath", original.toString(), ""));
+          final List<String[]> history = recordArguments(working, payload, dry, map);
+          assertEquals(!dry, new File(working, "result").isFile());
+          Files.deleteIfExists(new File(working, "result").toPath());
+          Files.deleteIfExists(new File(working, "result.map").toPath());
+          final File replay = scriptWithSubstitutions(history, shell, rules);
+          Files.move(original.toPath(), relocated.toPath());
+          assertReplaySucceeds(replay, shell, relocated);
+          final File output = new File(relocated, "nested/output/result");
+          assertEquals(encodedArguments(expected), read(output));
+          assertEquals(map, new File(output.getParentFile(), "result.map").isFile());
+          assertFalse(new File(relocated, "result").exists());
+          assertNoTemporaryMaps(output.getParentFile());
+        }
+      }
+    }
+  }
+
   private void checkCapturedPathSuffixes(final String shell) throws Exception {
     for (final boolean named : new boolean[] {
         false, true
@@ -1036,6 +1105,12 @@ public class TestLinkerReplay {
   }
 
   @Test
+  public void testBatchReplayRecognizesEveryAbsoluteSearchEntry() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkAbsoluteSearchLists("bat");
+  }
+
+  @Test
   public void testBatchReplayRemovesOnlyExplicitlyEmptiedArguments() throws Exception {
     Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
     checkRemovedArguments("bat");
@@ -1144,6 +1219,15 @@ public class TestLinkerReplay {
         "sh", "bash"
     })
       checkLiteralSearchEntries(shell);
+  }
+
+  @Test
+  public void testPosixReplayRecognizesEveryAbsoluteSearchEntry() throws Exception {
+    Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+    for (final String shell : new String[] {
+        "sh", "bash"
+    })
+      checkAbsoluteSearchLists(shell);
   }
 
   @Test
