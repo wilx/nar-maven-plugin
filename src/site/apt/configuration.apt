@@ -671,8 +671,17 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         lists, including entries introduced by earlier rules. For example, removing
         <<</project/>>> from <<</project/missing:/project/lib>>> resolves both entries from
         the invocation directory. Relative and empty list entries stay unchanged, and
-        directory text added to a captured component stays part of that component. Ordinary file and <<<-L>>>/<<<-F>>> operands retain
-        literal colons in directory names, and Windows drive colons are not list separators.
+        directory text added to a captured component stays part of that component. Ordinary
+        file and <<<-L>>>/<<<-F>>> operands retain literal colons in directory names, and
+        Windows drive colons are not list separators.
+        A search-list component that starts with the loader token <<<$ORIGIN>>> or
+        <<<${ORIGIN}>>> after all substitutions keeps that token literally, without an
+        invocation-directory prefix. For example, replacing <<</project/lib>>> with
+        <<<$ORIGIN/../../lib>>> leaves <<<$ORIGIN/../../lib>>> in the linker argument;
+        shell quoting prevents expansion by the shell. If a later rule changes it back to
+        an ordinary relative path, that path again resolves from the invocation directory.
+        This exception applies only to linker search-path lists. Ordinary file and
+        <<<-L>>>/<<<-F>>> operands, and names such as <<<$ORIGINAL>>>, keep their usual bases.
         Regex rules match complete arguments; generated directory references are added only when
         the final script is rendered. Originally relative paths remain relative to the recorded
         linker directory. Relative working directories also resolve from the invocation

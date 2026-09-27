@@ -141,6 +141,20 @@ public final class ReplayCommand {
       return start;
     }
 
+    private boolean isOriginSearchPath(final Path path) {
+      if (pathListStart(this.value, path.start) < 0)
+        return false;
+      final String component = this.value.substring(path.start, path.end);
+      if (component.startsWith("${ORIGIN}"))
+        return true;
+      if (!component.startsWith("$ORIGIN"))
+        return false;
+      if (component.length() == "$ORIGIN".length())
+        return true;
+      final char next = component.charAt("$ORIGIN".length());
+      return !(next >= 'A' && next <= 'Z' || next >= 'a' && next <= 'z' || next >= '0' && next <= '9' || next == '_');
+    }
+
     /**
      * Keep punctuation in unchanged or copied path text literal in the next rule.
      */
@@ -295,11 +309,13 @@ public final class ReplayCommand {
       }
     }
 
-    void removeAbsolutePaths() {
-      // Decide the base after all rules, so a path made absolute again needs no
-      // runtime prefix.
+    void removePathsWithoutInvocationBase() {
+      // Decide after all rules: absolute paths and leading loader ORIGIN tokens in
+      // search lists need no invocation prefix. Retain provenance until now in case
+      // a later rule restores an ordinary relative path or removes the option.
       for (final java.util.Iterator<Path> positions = this.paths.iterator(); positions.hasNext();) {
-        if (isAbsolute(this.value.substring(positions.next().start)))
+        final Path path = positions.next();
+        if (isAbsolute(this.value.substring(path.start)) || isOriginSearchPath(path))
           positions.remove();
       }
     }
@@ -610,7 +626,7 @@ public final class ReplayCommand {
       }
     }
     for (final Argument argument : result)
-      argument.removeAbsolutePaths();
+      argument.removePathsWithoutInvocationBase();
     return result;
   }
 
