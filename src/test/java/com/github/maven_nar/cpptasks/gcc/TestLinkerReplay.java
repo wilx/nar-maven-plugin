@@ -680,6 +680,108 @@ public class TestLinkerReplay {
     }
   }
 
+  @Test
+  public void testPosixReplayTracksChangedPathStructure() throws Exception {
+    Assume.assumeTrue(new File("/bin/sh").isFile());
+    for (final String shell : new String[] {"sh", "bash"}) checkChangedPathStructure(shell);
+  }
+
+  @Test
+  public void testBatchReplayTracksChangedPathStructure() throws Exception {
+    Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+    checkChangedPathStructure("bat");
+  }
+
+  private void checkChangedPathStructure(final String shell) throws Exception {
+    for (final String shape : new String[] {"duplicate", "wrapped", "prefixed", "absolute", "selected", "reordered",
+        "adjacent", "adjacentReordered", "concatenated", "unwrapped", "punctuation"}) {
+      for (final boolean named : new boolean[] {false, true}) {
+        for (final boolean map : new boolean[] {false, true}) {
+          for (final boolean dry : new boolean[] {false, true}) {
+            checkChangedPathStructure(shell, shape, named, map, dry);
+          }
+        }
+      }
+    }
+  }
+
+  private void checkChangedPathStructure(final String shell, final String shape, final boolean named,
+      final boolean map, final boolean dry) throws Exception {
+    final String id = shell + shape + named + map + dry;
+    final File original = new File(directory, "structure original " + id);
+    final File working = new File(original, "nested/output");
+    assertTrue(working.mkdirs());
+    final String special = "bat".equals(shell) ? " %PATH%! & ^" : " %! & ' \" $";
+    final File relocated = new File(directory, "structure relocated " + id + special);
+    final String sep = File.separator;
+    final String delimiter = File.pathSeparator;
+    final String component = "punctuation".equals(shape) ? "lib, %!&" + ("bat".equals(shell) ? "" : " ' \" :data") : "lib";
+    final List<String[]> history = recordArguments(working, Arrays.asList(new File(original, "lib").toString()), dry, map);
+    assertEquals(!dry, new File(working, "result").isFile());
+    Files.deleteIfExists(new File(working, "result").toPath());
+    Files.deleteIfExists(new File(working, "result.map").toPath());
+    final List<Substitution> rules = new ArrayList<>();
+    rules.add(substitution("absolutePath", original.toString(), ""));
+    // Ant's readable command display cannot record both quote styles in one argument.
+    // Introduce the punctuation through a rule, before it is copied by the next rule.
+    if (!"lib".equals(component)) {
+      rules.add(substitution("regex", "^lib$", java.util.regex.Matcher.quoteReplacement(component)));
+    }
+    final String capture = named ? "${path}" : "$1";
+    final String pattern = "^" + (named ? "(?<path>" : "(") + java.util.regex.Pattern.quote(component) + ")$";
+    final String base = relocated.toString() + sep;
+    final String absolute = new File(directory, "absolute structure " + id + special).toString() + sep;
+    String replacement;
+    String expected;
+    if ("wrapped".equals(shape) || "unwrapped".equals(shape)) {
+      replacement = "-Wl,-rpath," + capture + java.util.regex.Matcher.quoteReplacement(sep + "plugins");
+      expected = "-Wl,-rpath," + base + component + sep + "plugins";
+    } else if ("prefixed".equals(shape) || "punctuation".equals(shape)) {
+      replacement = "-Wl,-rpath," + java.util.regex.Matcher.quoteReplacement("objects" + sep) + capture + delimiter
+          + java.util.regex.Matcher.quoteReplacement("other" + sep) + capture;
+      expected = "-Wl,-rpath," + base + "objects" + sep + component + delimiter + base + "other" + sep + component;
+    } else if ("absolute".equals(shape)) {
+      replacement = java.util.regex.Matcher.quoteReplacement(absolute) + capture + delimiter + capture;
+      expected = absolute + component + delimiter + base + component;
+    } else {
+      replacement = capture + delimiter + capture + java.util.regex.Matcher.quoteReplacement(sep + "plugins");
+      expected = base + component + delimiter + base + component + sep + "plugins";
+    }
+    if (shape.startsWith("adjacent")) {
+      final boolean reordered = "adjacentReordered".equals(shape);
+      final String fragments = reordered ? (named ? "${tail}${head}" : "$2$1") : (named ? "${head}${tail}" : "$1$2");
+      rules.add(substitution("regex", named ? "^(?<head>l)(?<tail>ib)$" : "^(l)(ib)$",
+          java.util.regex.Matcher.quoteReplacement("objects" + sep) + fragments));
+      expected = base + "objects" + sep + (reordered ? "ibl" : component);
+    } else if ("concatenated".equals(shape)) {
+      rules.add(substitution("regex", pattern, java.util.regex.Matcher.quoteReplacement("objects" + sep) + capture + capture));
+      expected = base + "objects" + sep + component + component;
+    } else rules.add(substitution("regex", pattern, replacement));
+    if ("selected".equals(shape) || "reordered".equals(shape)) {
+      rules.add(substitution("regex", "^(.*)" + java.util.regex.Pattern.quote(delimiter) + "(.*)$",
+          "selected".equals(shape) ? "$2" : "$2" + delimiter + "$1"));
+      if ("selected".equals(shape)) {
+        rules.add(substitution("regex", "^(.*" + java.util.regex.Pattern.quote(sep + "plugins") + ")$",
+            java.util.regex.Matcher.quoteReplacement("objects" + sep) + "$1"));
+        expected = base + "objects" + sep + component + sep + "plugins";
+      } else expected = base + component + sep + "plugins" + delimiter + base + component;
+    }
+    if ("unwrapped".equals(shape)) {
+      rules.add(substitution("regex", "^-Wl,-rpath,(.*)$", "$1"));
+      rules.add(substitution("regex", "^(lib.*)$", java.util.regex.Matcher.quoteReplacement("objects" + sep) + "$1"));
+      expected = base + "objects" + sep + component + sep + "plugins";
+    }
+    final File replay = scriptWithSubstitutions(history, shell, rules);
+    Files.move(original.toPath(), relocated.toPath());
+    assertReplaySucceeds(replay, shell, relocated);
+    final File output = new File(relocated, "nested/output/result");
+    assertEquals(shape, encodedArguments(Arrays.asList(expected)), read(output));
+    assertEquals(map, new File(output.getParentFile(), "result.map").isFile());
+    if (map) assertEquals("map", read(new File(output.getParentFile(), "result.map")));
+    assertFalse(new File(relocated, "result").exists());
+    assertNoTemporaryMaps(output.getParentFile());
+  }
+
   private File argumentScript(final List<String[]> history, final String shell, final File working,
       final List<Substitution> rules) throws Exception {
     // Exercise the payload rules without also rewriting the JVM or the test's working directory.
