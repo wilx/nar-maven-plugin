@@ -657,6 +657,11 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         one path and add another directory prefix. Punctuation copied inside a filename remains
         literal; newly inserted separators between captures distinguish separate paths.
         Adjacent capture fragments that reconstruct one filename receive one directory prefix.
+        A capture of a path suffix retains the same base: after making <<<lib/plugins>>> relative,
+        <<<^lib/(plugins)$>>> replaced with <<<$1:$1/fallback>>> resolves to
+        <<<invocation-directory/plugins:invocation-directory/plugins/fallback>>>. Later rules
+        retain the base of each copied component. Captures of unrelated options or literal list
+        entries do not inherit a neighboring path's base.
         In linker search-path lists, literal entries may precede the first captured path:
         <<<^(lib)$>>> replaced with <<</usr/lib:$1/plugins>>> becomes
         <<</usr/lib:invocation-directory/lib/plugins>>>. This applies to <<<-rpath>>> and

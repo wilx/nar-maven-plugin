@@ -41,21 +41,49 @@ public final class ReplayCommand {
    * rendering.
    */
   private static final class Argument {
+    /**
+     * A component's extent prevents unrelated captures from inheriting its base.
+     */
+    private static final class Path {
+      final int start;
+      final int end;
+
+      Path(final int start, final int end) {
+        this.start = start;
+        this.end = end;
+      }
+
+      boolean overlaps(final int start, final int end) {
+        return this.start < end && start < this.end;
+      }
+    }
+
     private String value;
-    private final SortedSet<Integer> paths = new TreeSet<>();
+    private final List<Path> paths = new ArrayList<>();
+
     private boolean pathList;
 
-    Argument(final String original) {
+    Argument(final String original, final boolean pathList) {
       this.value = original;
+      this.pathList = pathList;
       recognizeOperand(original);
+    }
+
+    private void addPath(final String text, final int start) {
+      for (final Path path : this.paths) {
+        if (path.start == start)
+          return;
+      }
+      this.paths.add(new Path(start, pathEnd(text, start, text.length(), new ArrayList<Path>())));
     }
 
     /**
      * Locate this occurrence's complete path, including directory text added before
      * its capture.
      */
-    private int copiedPathStart(final int position, final String text, final Substitution.Replacement edit,
+    private int copiedPathStart(final Path path, final String text, final Substitution.Replacement edit,
         final Substitution.GroupCopy copy) {
+      final int position = Math.max(path.start, copy.start);
       if (position != copy.start)
         return copy.outputStart + position - copy.start;
       int start = edit.outputStart;
@@ -66,15 +94,13 @@ public final class ReplayCommand {
         start = previous.outputStart + previous.end - previous.start;
         preceding = previous;
       }
-      // Adjacent or overlapping captures of the same path can reconstruct one
-      // filename,
-      // including in reverse order. Keep its base before all fragments, never between
-      // them.
+      // Captures of the same component can reconstruct one filename, even when
+      // reordered or when text between their source ranges is dropped. Keep the
+      // base before all fragments.
       final String gap = text.substring(start, copy.outputStart);
-      if (preceding != null && preceding.start >= position && preceding.start <= copy.end && copy.start <= preceding.end
-          && this.paths.subSet(position + 1, preceding.end + 1).isEmpty() && gap.indexOf(',') < 0
-          && gap.indexOf(':') < 0 && gap.indexOf(';') < 0) {
-        return copiedPathStart(preceding.start, text, edit, preceding);
+      if (preceding != null && path.overlaps(preceding.start, preceding.end) && preceding.end <= path.end
+          && gap.indexOf(',') < 0 && gap.indexOf(':') < 0 && gap.indexOf(';') < 0) {
+        return copiedPathStart(path, text, edit, preceding);
       }
       // Only interpret newly inserted literal text. Punctuation inside a captured
       // filename
@@ -109,8 +135,31 @@ public final class ReplayCommand {
       return start;
     }
 
-    private void move(final int position, final String before, final String after,
+    /**
+     * Keep punctuation in unchanged or copied path text literal in the next rule.
+     */
+    private void keepLiteral(final Path path, final int start, final int end, final int outputStart,
+        final List<Path> literal) {
+      if (path.overlaps(start, end)) {
+        literal.add(
+            new Path(outputStart + Math.max(path.start, start) - start, outputStart + Math.min(path.end, end) - start));
+      }
+    }
+
+    private void keepUnchanged(final Path path, final List<Substitution.Replacement> edits, final List<Path> literal) {
+      int start = 0;
+      int shift = 0;
+      for (final Substitution.Replacement edit : edits) {
+        keepLiteral(path, start, edit.start, start + shift, literal);
+        start = edit.end;
+        shift = edit.outputEnd - edit.end;
+      }
+      keepLiteral(path, start, this.value.length(), start + shift, literal);
+    }
+
+    private void move(final Path path, final String before, final String after,
         final List<Substitution.Replacement> edits, final SortedSet<Integer> moved) {
+      final int position = path.start;
       int shift = 0;
       for (final Substitution.Replacement edit : edits) {
         if (position < edit.start)
@@ -118,8 +167,8 @@ public final class ReplayCommand {
         if (position < edit.end || position == edit.start) {
           boolean copied = false;
           for (final Substitution.GroupCopy copy : edit.copies) {
-            if (position >= copy.start && (position < copy.end || copy.start == copy.end && position == copy.start)) {
-              moved.add(copiedPathStart(position, after, edit, copy));
+            if (path.overlaps(copy.start, copy.end) || copy.start == copy.end && position == copy.start) {
+              moved.add(copiedPathStart(path, after, edit, copy));
               copied = true;
             }
           }
@@ -154,6 +203,29 @@ public final class ReplayCommand {
       moved.add(position + shift);
     }
 
+    private int pathEnd(final String text, final int start, final int limit, final List<Path> literal) {
+      final boolean list = pathListStart(text, start) >= 0 || limit < text.length();
+      final boolean comma = text.startsWith("-Wl,") || text.startsWith("-") && !text.startsWith("-L")
+          && !text.startsWith("-F") && text.indexOf('=') >= 0 && text.indexOf('=') < start;
+      for (int i = start; i < limit; i++) {
+        boolean copied = false;
+        for (final Path piece : literal) {
+          if (i >= piece.start && i < piece.end) {
+            copied = true;
+            break;
+          }
+        }
+        if (copied)
+          continue;
+        final char c = text.charAt(i);
+        final boolean drive = c == ':' && i == start + 1 && Character.isLetter(text.charAt(start)) && i + 1 < limit
+            && (text.charAt(i + 1) == '/' || text.charAt(i + 1) == '\\');
+        if (c == ',' && comma || list && (c == ';' || c == ':' && !drive))
+          return i;
+      }
+      return limit;
+    }
+
     private int pathListStart(final String text, final int end) {
       // Inspect option syntax before the capture; never scan the captured filename
       // itself.
@@ -184,14 +256,14 @@ public final class ReplayCommand {
         start = -1;
       }
       if (start >= 0)
-        this.paths.add(start);
+        addPath(text, start);
     }
 
     void removeAbsolutePaths() {
       // Decide the base after all rules, so a path made absolute again needs no
       // runtime prefix.
-      for (final java.util.Iterator<Integer> positions = this.paths.iterator(); positions.hasNext();) {
-        if (isAbsolute(this.value.substring(positions.next())))
+      for (final java.util.Iterator<Path> positions = this.paths.iterator(); positions.hasNext();) {
+        if (isAbsolute(this.value.substring(positions.next().start)))
           positions.remove();
       }
     }
@@ -206,7 +278,8 @@ public final class ReplayCommand {
       }
       final StringBuilder result = new StringBuilder(batch ? "\"" : "");
       int previous = 0;
-      for (final int position : this.paths) {
+      for (final Path path : this.paths) {
+        final int position = path.start;
         final String literal = this.value.substring(previous, position);
         result.append(batch ? literal.replace("%", "%%") : quote(literal, false));
         result.append(batch ? "%_nar_replay_base%\\" : "\"$_nar_replay_base\"'/'");
@@ -227,29 +300,43 @@ public final class ReplayCommand {
 
     void substitute(final String next, final List<Substitution.Replacement> edits, final boolean pathRule,
         final boolean pathList) {
-      this.pathList = pathList;
       if (pathRule) {
         // Every explicit absolute path match is recognized in this rule's actual input.
         for (final Substitution.Replacement edit : edits) {
           if (isAbsolute(this.value.substring(edit.start, edit.end)))
-            this.paths.add(edit.start);
+            addPath(this.value, edit.start);
         }
       }
+      this.pathList = pathList;
       final SortedSet<Integer> moved = new TreeSet<>();
-      for (final int position : this.paths)
-        move(position, this.value, next, edits, moved);
+      final List<Path> literal = new ArrayList<>();
+      for (final Path path : this.paths) {
+        move(path, this.value, next, edits, moved);
+        keepUnchanged(path, edits, literal);
+      }
       // Lookaround captures can copy text outside the replaced interval as well.
       for (final Substitution.Replacement edit : edits) {
         for (final Substitution.GroupCopy copy : edit.copies) {
-          for (final int position : this.paths) {
-            if (position >= copy.start && position < copy.end) {
-              moved.add(copiedPathStart(position, next, edit, copy));
+          for (final Path path : this.paths) {
+            if (path.overlaps(copy.start, copy.end)) {
+              final int start = copiedPathStart(path, next, edit, copy);
+              // An edit inside a path retains the boundary before its unchanged prefix.
+              if (start != edit.outputStart || path.start >= edit.start || edit.start >= path.end)
+                moved.add(start);
+              keepLiteral(path, copy.start, copy.end, copy.outputStart, literal);
+              // The directory prefix belongs to this component as well.
+              literal.add(new Path(start, copy.outputStart + Math.max(path.start, copy.start) - copy.start));
             }
           }
         }
       }
       this.paths.clear();
-      this.paths.addAll(moved);
+      final List<Integer> starts = new ArrayList<>(moved);
+      for (int i = 0; i < starts.size(); i++) {
+        final int start = starts.get(i);
+        final int limit = i + 1 < starts.size() ? starts.get(i + 1) : next.length();
+        this.paths.add(new Path(start, pathEnd(next, start, limit, literal)));
+      }
       this.value = next;
       recognizeOperand(next);
     }
@@ -466,7 +553,7 @@ public final class ReplayCommand {
   private Argument[] substituteArguments(final Script script) {
     final Argument[] result = new Argument[this.arguments.length];
     for (int i = 0; i < result.length; i++)
-      result[i] = new Argument(this.arguments[i]);
+      result[i] = new Argument(this.arguments[i], isPathListOperand(this.arguments, i));
     if (script.getSubstitutions() != null) {
       for (final Substitution rule : script.getSubstitutions()) {
         final boolean pathRule = "absolutePath".equals(rule.getType()) || "relativePath".equals(rule.getType());

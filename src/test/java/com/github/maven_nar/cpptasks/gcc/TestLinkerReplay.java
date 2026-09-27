@@ -202,7 +202,7 @@ public class TestLinkerReplay {
           final List<Substitution> rules = new ArrayList<>();
           rules.add(substitution("absolutePath", original.toString(), ""));
           for (final String form : new String[] {
-              "separate", "attached", "later", "adjacent", "literal", "unrelated", "file", "punctuation"
+              "separate", "attached", "later", "adjacent", "disjoint", "literal", "unrelated", "file", "punctuation"
           }) {
             final String option = "attached".equals(form) || "unrelated".equals(form) ? "-Wl,-rpath,"
                 : "file".equals(form) ? "-L" : "punctuation".equals(form) ? "-F" : "";
@@ -210,7 +210,8 @@ public class TestLinkerReplay {
               payload.addAll(Arrays.asList("-Xlinker", "-rpath", "-Xlinker"));
               expected.addAll(Arrays.asList("-Xlinker", "-rpath", "-Xlinker"));
             }
-            final String component = "punctuation".equals(form) ? "leaf,part" + delimiter + "name" : form;
+            final String component = "punctuation".equals(form) ? "leaf,part" + delimiter + "name"
+                : "disjoint".equals(form) ? "path-pieces" : form;
             final String tail = "literal".equals(form) ? delimiter + "literal"
                 : "unrelated".equals(form) ? ",--as-needed" : "";
             payload.add(option + new File(original, "lib" + sep + component) + tail);
@@ -232,6 +233,11 @@ public class TestLinkerReplay {
                   + (named ? "(?<path>adja)(?<other>cent)" : "(adja)(cent)");
               replacement = java.util.regex.Matcher.quoteReplacement("objects" + sep) + capture + other;
               value = base + "objects" + sep + component;
+            } else if ("disjoint".equals(form)) {
+              pattern = "^" + java.util.regex.Pattern.quote("lib" + sep)
+                  + (named ? "(?<path>path)-(?<other>pieces)" : "(path)-(pieces)");
+              replacement = java.util.regex.Matcher.quoteReplacement("objects" + sep) + capture + other;
+              value = base + "objects" + sep + "pathpieces";
             } else if ("file".equals(form) || "punctuation".equals(form)) {
               replacement = java.util.regex.Matcher.quoteReplacement(option + "objects" + sep) + capture
                   + ("file".equals(form) ? capture : "");
@@ -247,6 +253,12 @@ public class TestLinkerReplay {
             }
             expected.add(value);
           }
+          // Repeated edits inside one component keep a single base before its prefix.
+          payload.add(new File(original, "lib/fragment/lib/fragment").toString());
+          rules.add(substitution("regex", named ? "(?<path>fragment)" : "(fragment)",
+              java.util.regex.Matcher.quoteReplacement("objects" + sep) + capture));
+          expected.add(
+              base + "lib" + sep + "objects" + sep + "fragment" + sep + "lib" + sep + "objects" + sep + "fragment");
           final List<String[]> history = recordArguments(working, payload, dry, map);
           assertEquals(!dry, new File(working, "result").isFile());
           Files.deleteIfExists(new File(working, "result").toPath());
