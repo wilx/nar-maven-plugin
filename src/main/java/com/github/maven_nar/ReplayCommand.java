@@ -179,6 +179,8 @@ public final class ReplayCommand {
   private static final class Argument {
     private final String value;
     private final SortedSet<Integer> paths = new TreeSet<>();
+    private int operandStart = -1;
+    private boolean embeddedPaths;
 
     Argument(final String original, final Script script) {
       String current = original;
@@ -191,7 +193,12 @@ public final class ReplayCommand {
           if (pathRule) {
             // Every explicit absolute path match is recognized in this rule's actual input.
             for (final Substitution.Replacement edit : edits) {
-              if (isAbsolute(current.substring(edit.start, edit.end))) this.paths.add(edit.start);
+              if (isAbsolute(current.substring(edit.start, edit.end))) {
+                this.paths.add(edit.start);
+                // A second path (including a path list starting with an absolute path) needs
+                // independent capture positions rather than a single operand boundary.
+                if (edit.start != this.operandStart) this.embeddedPaths = true;
+              }
             }
           }
           final SortedSet<Integer> moved = new TreeSet<>();
@@ -213,6 +220,13 @@ public final class ReplayCommand {
         }
       }
       this.value = current;
+      if (!this.embeddedPaths && this.operandStart >= 0
+          && (this.operandStart == 0 || this.value.startsWith("-L") || this.value.startsWith("-F"))) {
+        // A capture may move within one path: objects/$1 still denotes a single operand.
+        // Its base belongs before the complete path, not just before the copied filename.
+        this.paths.clear();
+        this.paths.add(this.operandStart);
+      }
       // Decide the base after all rules, so a path made absolute again needs no runtime prefix.
       for (final java.util.Iterator<Integer> positions = this.paths.iterator(); positions.hasNext();) {
         if (isAbsolute(this.value.substring(positions.next()))) positions.remove();
@@ -220,8 +234,12 @@ public final class ReplayCommand {
     }
 
     private void recognizeOperand(final String text) {
-      if (isAbsolute(text)) this.paths.add(0);
-      else if ((text.startsWith("-L") || text.startsWith("-F")) && isAbsolute(text.substring(2))) this.paths.add(2);
+      final int start = isAbsolute(text) ? 0
+          : (text.startsWith("-L") || text.startsWith("-F")) && isAbsolute(text.substring(2)) ? 2 : -1;
+      if (start >= 0) {
+        this.paths.add(start);
+        this.operandStart = start;
+      }
     }
 
     private static void move(final int position, final String before, final String after,

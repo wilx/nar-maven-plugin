@@ -645,6 +645,11 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         Explicit path substitutions recognize every matching path in the current argument,
         including paths introduced by earlier rules and multiple paths inside one option.
         Later substitutions retain these path references, including paths copied by regex groups.
+        For a complete path operand, a later regex replacement such as <<<objects/$1>>> keeps
+        the invocation directory before the whole path: <<<main.o>>> becomes
+        <<<invocation-directory/objects/main.o>>>. An absolute replacement prefix makes the
+        result absolute, with no invocation-directory prefix. This also applies to the path
+        following an attached <<<-L>>> or <<<-F>>> option.
         Regex rules match complete arguments; generated directory references are added only when
         the final script is rendered. Originally relative paths remain relative to the recorded
         linker directory.
