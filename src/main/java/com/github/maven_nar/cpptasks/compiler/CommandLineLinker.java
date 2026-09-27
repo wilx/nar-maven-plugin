@@ -29,6 +29,8 @@ import java.util.*;
 import org.apache.tools.ant.BuildException;
 import org.apache.tools.ant.types.Environment;
 
+import com.github.maven_nar.ReplayCommand;
+import com.github.maven_nar.ReplayCommandList;
 import com.github.maven_nar.cpptasks.CCTask;
 import com.github.maven_nar.cpptasks.CUtil;
 import com.github.maven_nar.cpptasks.LinkerDef;
@@ -371,6 +373,7 @@ public abstract class CommandLineLinker extends AbstractLinker {
     }
     final File mapFile = config.getMapFile(outputFile);
     File temporaryMap = null;
+    String temporaryMapName = null;
     try {
       CommandLineLinkerConfiguration invocation = config;
       if (mapFile != null) {
@@ -379,7 +382,8 @@ public abstract class CommandLineLinker extends AbstractLinker {
         if (!isDryRun()) {
           temporaryMap = File.createTempFile("nar-map-", ".tmp", parentDir);
         }
-        invocation = config.withMapFileName(temporaryMap == null ? "nar-map-dry-run.tmp" : temporaryMap.getName());
+        temporaryMapName = temporaryMap == null ? "nar-map-" + UUID.randomUUID() + ".tmp" : temporaryMap.getName();
+        invocation = config.withMapFileName(temporaryMapName);
       }
       String[] execArgs = prepareArguments(task, parentPath, outputFile.getName(), sourceFiles, invocation);
       int commandLength = 0;
@@ -392,6 +396,7 @@ public abstract class CommandLineLinker extends AbstractLinker {
         execArgs = prepareResponseFile(outputFile, execArgs);
       }
 
+      recordCommand(parentDir, execArgs, temporaryMapName, mapFile == null ? null : mapFile.getName());
       final int retval = runCommand(task, parentDir, execArgs);
       if (retval != 0) {
         throw new BuildException(getCommandWithPath(config) + " failed with return code " + retval, task.getLocation());
@@ -536,9 +541,22 @@ public abstract class CommandLineLinker extends AbstractLinker {
    * compiler
    */
   protected int runCommand(final CCTask task, final File workingDir, final String[] cmdline) throws BuildException {
-    commands.add(cmdline);
     if (dryRun) return 0;
     return CUtil.runCommand(task, workingDir, cmdline, this.newEnvironment, this.env);
+  }
+
+  /** True when this adapter supplies literal arguments without embedded shell quoting. */
+  protected boolean hasRawReplayArguments() {
+    return false;
+  }
+
+  private void recordCommand(final File workingDir, final String[] arguments, final String temporaryMap,
+      final String finalMap) {
+    if (this.commands instanceof ReplayCommandList && hasRawReplayArguments()) {
+      ((ReplayCommandList) this.commands).add(arguments, new ReplayCommand(workingDir, arguments, temporaryMap, finalMap));
+    } else if (this.commands != null) {
+      this.commands.add(arguments);
+    }
   }
 
   protected final void setCommand(final String command) {

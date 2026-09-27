@@ -29,6 +29,46 @@
   </parent>
   <artifactId>it0041-linker-map</artifactId>
   <packaging>pom</packaging>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>com.github.maven-nar</groupId>
+        <artifactId>nar-maven-plugin</artifactId>
+        <configuration>
+          <skipTests>true</skipTests>
+          <linker>
+            <options>
+              <option>-g</option>
+              <option>-Wl,--version-script=${project.basedir}/../first.map,--version-script=${project.basedir}/../second.map</option>
+            </options>
+          </linker>
+          <replay>
+            <scripts>
+              <script>
+                <id>relink-sh</id>
+                <scriptType>sh</scriptType>
+                <compile>false</compile>
+                <substitutions>
+                  <substitution><replace>${project.basedir}</replace><replaceWith>/nar-replay-project</replaceWith></substitution>
+                  <substitution><type>absolutePath</type><replace>/nar-replay-project</replace><replaceWith>${project.basedir}/./</replaceWith></substitution>
+                  <substitution><type>regex</type><replace>^-g$</replace></substitution>
+                </substitutions>
+              </script>
+              <script>
+                <id>relink-bash</id>
+                <scriptType>bash</scriptType>
+                <compile>false</compile>
+                <substitutions>
+                  <substitution><type>absolutePath</type><replace>${project.basedir}</replace><replaceWith>${project.basedir}/./</replaceWith></substitution>
+                  <substitution><type>regex</type><replace>^-g$</replace></substitution>
+                </substitutions>
+              </script>
+            </scripts>
+          </replay>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
   <modules>
     <module>gcc</module>
     <module>gcc-decorated</module>
