@@ -72,6 +72,26 @@ jobs:
           arch: x64
           vsversion: '2022'
 
+      - name: Install runtime for the bundled third-party JNI library
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # it0006 ships a prebuilt DLL linked against MSVCR100.dll.
+          # Microsoft Visual C++ 2010 SP1 MFC Security Update (KB2565063).
+          $runtimeDll = Join-Path $env:SystemRoot 'System32/msvcr100.dll'
+          if (Test-Path $runtimeDll) { exit 0 }
+          $installer = Join-Path $env:RUNNER_TEMP 'vcredist2010_x64.exe'
+          Invoke-WebRequest -Uri 'https://download.microsoft.com/download/1/6/5/165255e7-1014-4d0a-b094-b6a430a6bffc/vcredist_x64.exe' -OutFile $installer
+          $expectedHash = 'f3b7a76d84d23f91957aa18456a14b4e90609e4ce8194c5653384ed38dada6f3'
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $expectedHash) {
+            throw 'Visual C++ 2010 runtime checksum mismatch'
+          }
+          $install = Start-Process -FilePath $installer -ArgumentList '/q', '/norestart' -Wait -PassThru
+          if ($install.ExitCode -notin 0, 3010) {
+            throw "Visual C++ 2010 runtime installation failed: $($install.ExitCode)"
+          }
+          if (!(Test-Path $runtimeDll)) { throw 'MSVCR100.dll is still missing after installation' }
+
       # Use the runner's native shell: bash on Linux, PowerShell on Windows.
       # Git Bash can shadow the MSVC linker with its unrelated link executable.
       - name: Build and run unit and native integration tests

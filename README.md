@@ -56,7 +56,9 @@ mvn -B -ntp -V -Dinvoker.debug=true -Prun-its clean install
 Linux builds need `build-essential`, `gfortran`, `autoconf`, `automake`, and
 `libtool-bin`. On Windows, use an x64 Visual Studio developer environment and
 a short checkout path. CI maps its Windows workspace to `N:` for Java 8 path
-length compatibility.
+length compatibility. The bundled third-party DLL in `it0006` also needs the
+[Visual C++ 2010 SP1 x64 runtime](https://www.microsoft.com/en-us/download/details.aspx?id=26999)
+(`MSVCR100.dll`); CI installs it when missing.
 
 The existing test profiles enable GNU fixtures when `/usr/bin/autoreconf`
 exists, Fortran when `/usr/bin/gfortran` exists, and the toolchain fixture when
