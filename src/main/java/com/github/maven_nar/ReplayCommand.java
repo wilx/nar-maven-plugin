@@ -97,8 +97,9 @@ public final class ReplayCommand {
     final List<String> args = new ArrayList<>();
     final StringBuilder command = new StringBuilder();
     boolean needsBase = false;
+    final Argument[] rewritten = substituteArguments(script);
     for (int i = 0; i < this.arguments.length; i++) {
-      final Argument argument = new Argument(this.arguments[i], script);
+      final Argument argument = rewritten[i];
       final String value = argument.value;
       // Only an explicitly emptied argument is removed, after every substitution has run.
       if (!this.arguments[i].isEmpty() && value.isEmpty()) {
@@ -119,6 +120,46 @@ public final class ReplayCommand {
     } else {
       writePosix(script, writer, cwd, line, temporary, destination, needsBase);
     }
+  }
+
+  private Argument[] substituteArguments(final Script script) {
+    final Argument[] result = new Argument[this.arguments.length];
+    for (int i = 0; i < result.length; i++) result[i] = new Argument(this.arguments[i]);
+    if (script.getSubstitutions() != null) {
+      for (final Substitution rule : script.getSubstitutions()) {
+        final boolean pathRule = "absolutePath".equals(rule.getType()) || "relativePath".equals(rule.getType());
+        final String[] next = new String[result.length];
+        final List<List<Substitution.Replacement>> edits = new ArrayList<>();
+        for (int i = 0; i < result.length; i++) {
+          final List<Substitution.Replacement> replacements = new ArrayList<>();
+          edits.add(replacements);
+          next[i] = rule.substitute(result[i].value, result[i].paths.isEmpty() && !pathRule ? null : replacements);
+        }
+        // Option context must reflect the same rule as its operand, including inserted or removed options.
+        for (int i = 0; i < result.length; i++) {
+          result[i].substitute(next[i], edits.get(i), pathRule, isPathListOperand(next, i));
+        }
+      }
+    }
+    for (final Argument argument : result) argument.removeAbsolutePaths();
+    return result;
+  }
+
+  private boolean isPathListOperand(final String[] values, final int index) {
+    int previous = index - 1;
+    while (previous >= 0 && values[previous].isEmpty() && !this.arguments[previous].isEmpty()) previous--;
+    if (previous >= 0 && "-Xlinker".equals(values[previous])) {
+      previous--;
+      while (previous >= 0 && values[previous].isEmpty() && !this.arguments[previous].isEmpty()) previous--;
+    }
+    if (previous < 0) return false;
+    final String option = values[previous];
+    return isPathListOption(option) || option.startsWith("-Wl,") && isPathListOption(option.substring(4));
+  }
+
+  private static boolean isPathListOption(final String option) {
+    return "-rpath".equals(option) || "--rpath".equals(option)
+        || "-rpath-link".equals(option) || "--rpath-link".equals(option);
   }
 
   private static void writePosix(final Script script, final PrintWriter writer, final String cwd, final String line,
@@ -177,46 +218,43 @@ public final class ReplayCommand {
 
   /** Literal argument text with path positions kept separately until shell rendering. */
   private static final class Argument {
-    private final String value;
+    private String value;
     private final SortedSet<Integer> paths = new TreeSet<>();
+    private boolean pathList;
 
-    Argument(final String original, final Script script) {
-      String current = original;
-      recognizeOperand(current);
-      if (script.getSubstitutions() != null) {
-        for (final Substitution rule : script.getSubstitutions()) {
-          final List<Substitution.Replacement> edits = new ArrayList<>();
-          final boolean pathRule = "absolutePath".equals(rule.getType()) || "relativePath".equals(rule.getType());
-          final String next = rule.substitute(current, this.paths.isEmpty() && !pathRule ? null : edits);
-          if (pathRule) {
-            // Every explicit absolute path match is recognized in this rule's actual input.
-            for (final Substitution.Replacement edit : edits) {
-              if (isAbsolute(current.substring(edit.start, edit.end))) {
-                this.paths.add(edit.start);
-              }
-            }
-          }
-          final SortedSet<Integer> moved = new TreeSet<>();
-          for (final int position : this.paths) {
-            move(position, current, next, edits, moved);
-          }
-          // Lookaround captures can copy text outside the replaced interval as well.
-          for (final Substitution.Replacement edit : edits) {
-            for (final Substitution.GroupCopy copy : edit.copies) {
-              for (final int position : this.paths) {
-                if (position >= copy.start && position < copy.end) {
-                  moved.add(copiedPathStart(position, next, edit, copy));
-                }
-              }
-            }
-          }
-          this.paths.clear();
-          this.paths.addAll(moved);
-          current = next;
-          recognizeOperand(current);
+    Argument(final String original) {
+      this.value = original;
+      recognizeOperand(original);
+    }
+
+    void substitute(final String next, final List<Substitution.Replacement> edits, final boolean pathRule,
+        final boolean pathList) {
+      this.pathList = pathList;
+      if (pathRule) {
+        // Every explicit absolute path match is recognized in this rule's actual input.
+        for (final Substitution.Replacement edit : edits) {
+          if (isAbsolute(this.value.substring(edit.start, edit.end))) this.paths.add(edit.start);
         }
       }
-      this.value = current;
+      final SortedSet<Integer> moved = new TreeSet<>();
+      for (final int position : this.paths) move(position, this.value, next, edits, moved);
+      // Lookaround captures can copy text outside the replaced interval as well.
+      for (final Substitution.Replacement edit : edits) {
+        for (final Substitution.GroupCopy copy : edit.copies) {
+          for (final int position : this.paths) {
+            if (position >= copy.start && position < copy.end) {
+              moved.add(copiedPathStart(position, next, edit, copy));
+            }
+          }
+        }
+      }
+      this.paths.clear();
+      this.paths.addAll(moved);
+      this.value = next;
+      recognizeOperand(next);
+    }
+
+    void removeAbsolutePaths() {
       // Decide the base after all rules, so a path made absolute again needs no runtime prefix.
       for (final java.util.Iterator<Integer> positions = this.paths.iterator(); positions.hasNext();) {
         if (isAbsolute(this.value.substring(positions.next()))) positions.remove();
@@ -288,12 +326,15 @@ public final class ReplayCommand {
       }
       // Only interpret newly inserted literal text. Punctuation inside a captured filename
       // remains part of that filename, even when it looks like an option or list separator.
-      if (preceding != null) {
+      final int listStart = pathListStart(text, copy.outputStart);
+      if (listStart >= 0) start = Math.max(start, listStart);
+      if (preceding != null || listStart >= 0) {
         for (int i = start; i < copy.outputStart; i++) {
           final char c = text.charAt(i);
           final boolean drive = c == ':' && i == start + 1 && Character.isLetter(text.charAt(start))
               && i + 1 < copy.outputStart && (text.charAt(i + 1) == '/' || text.charAt(i + 1) == '\\');
-          if (c == ',' || c == ';' || c == ':' && !drive) start = i + 1;
+          final boolean comma = c == ',' && (listStart < 0 || text.startsWith("-Wl,"));
+          if (comma || c == ';' || c == ':' && !drive) start = i + 1;
         }
       }
       String prefix = text.substring(start, copy.outputStart);
@@ -309,6 +350,21 @@ public final class ReplayCommand {
         start = equals >= 0 ? start + equals + 1 : copy.outputStart;
       }
       return start;
+    }
+
+    private int pathListStart(final String text, final int end) {
+      // Inspect option syntax before the capture; never scan the captured filename itself.
+      final boolean forwarded = text.startsWith("-Wl,");
+      final int start = forwarded ? text.lastIndexOf(',', end - 1) + 1 : 0;
+      for (final String option : new String[] {"-rpath", "--rpath", "-rpath-link", "--rpath-link"}) {
+        final String prefix = option + "=";
+        if (start + prefix.length() <= end && text.startsWith(prefix, start)) return start + prefix.length();
+      }
+      if (forwarded && start >= 4) {
+        final int previous = text.lastIndexOf(',', start - 2) + 1;
+        if (isPathListOption(text.substring(previous, start - 1))) return start;
+      }
+      return this.pathList ? 0 : -1;
     }
 
     String render(final boolean batch, final boolean executable) throws MojoExecutionException {

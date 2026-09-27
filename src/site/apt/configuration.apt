@@ -657,6 +657,14 @@ are lower in the dependency heirarchy appear lower in the list, maximizing symbo
         one path and add another directory prefix. Punctuation copied inside a filename remains
         literal; newly inserted separators between captures distinguish separate paths.
         Adjacent capture fragments that reconstruct one filename receive one directory prefix.
+        In linker search-path lists, literal entries may precede the first captured path:
+        <<<^(lib)$>>> replaced with <<</usr/lib:$1/plugins>>> becomes
+        <<</usr/lib:invocation-directory/lib/plugins>>>. This applies to <<<-rpath>>> and
+        <<<-rpath-link>>> (including their double-dash forms), separate <<<-Xlinker>>> arguments,
+        and attached <<<-Wl>>> or assignment forms. Option context is updated after each rule.
+        Literal list entries stay unchanged; directory text added to the captured component
+        stays part of that component. Ordinary file and <<<-L>>>/<<<-F>>> operands retain
+        literal colons in directory names, and Windows drive colons are not list separators.
         Regex rules match complete arguments; generated directory references are added only when
         the final script is rendered. Originally relative paths remain relative to the recorded
         linker directory.
